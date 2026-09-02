@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Viewport } from './canvas/Viewport';
 import { exportDocument } from './export/exportScene';
 import { enumerateFonts } from './state/fonts';
+import { installShortcuts } from './state/keyboard';
 import { useStore } from './state/store';
 import { planLoop } from './scene/timing';
 import { BottomBar } from './ui/BottomBar';
@@ -31,6 +32,8 @@ export function App() {
 
     void enumerateFonts().then(setFonts);
   }, [apply, setFonts, toast]);
+
+  useEffect(() => installShortcuts(), []);
 
   async function generate() {
     const doc = useStore.getState().doc;

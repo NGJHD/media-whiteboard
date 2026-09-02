@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { Api, EncodeRequest, OutputFormat } from '../shared/ipc';
+import type { Api, EncodeRequest, OutputFormat, ProjectFile } from '../shared/ipc';
 
 /**
  * contextIsolation is on, so the renderer sees only what is listed here.
@@ -31,6 +31,12 @@ const api = {
   // Electron removed File.path; this is the supported replacement.
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   importMedia: (sourcePath: string) => ipcRenderer.invoke('media:import', sourcePath),
+  importClipboardImage: (bytes: number[], mimeType: string) =>
+    ipcRenderer.invoke('media:importClipboardImage', bytes, mimeType),
+  saveProject: (data: ProjectFile, suggestedPath: string) =>
+    ipcRenderer.invoke('project:save', data, suggestedPath),
+  openProject: () => ipcRenderer.invoke('project:open'),
+  checkSources: (sourcePaths: string[]) => ipcRenderer.invoke('project:checkSources', sourcePaths),
   openMediaDialog: () => ipcRenderer.invoke('media:openDialog'),
   getCacheInfo: () => ipcRenderer.invoke('cache:info'),
   clearCache: () => ipcRenderer.invoke('cache:clear'),

@@ -1,13 +1,31 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, shell } from 'electron';
 import { execFile } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { AppInfo, CacheInfo, FfmpegInfo, ImportResult, OutputFormat } from '../shared/ipc';
+import {
+  PROJECT_EXTENSION,
+  type AppInfo,
+  type CacheInfo,
+  type FfmpegInfo,
+  type ImportResult,
+  type OutputFormat,
+  type ProjectFile,
+  type ProjectLoadResult,
+} from '../shared/ipc';
 import { registerExportHandler } from './export';
 import { binaries } from './ffmpeg';
 import { registerFrameScheme, serveFrames } from './frameProtocol';
-import { CACHE_LIMIT_BYTES, cacheSize, clearCache, evictCache, importMedia, listCache, ACCEPTED_EXTENSIONS } from './media';
+import {
+  ACCEPTED_EXTENSIONS,
+  CACHE_LIMIT_BYTES,
+  clearCache,
+  evictCache,
+  importClipboardImage,
+  importMedia,
+  listCache,
+} from './media';
 import { applyPaths, resolvePaths } from './paths';
 
 const execFileAsync = promisify(execFile);
@@ -133,6 +151,57 @@ async function cacheInfo(): Promise<CacheInfo> {
     limitBytes: CACHE_LIMIT_BYTES,
   };
 }
+
+ipcMain.handle(
+  'media:importClipboardImage',
+  (_e, bytes: number[], mimeType: string): Promise<ImportResult> =>
+    importClipboardImage(paths.cacheDir, Buffer.from(bytes), mimeType),
+);
+
+/* -- Project files (§13) --------------------------------------------------- */
+
+ipcMain.handle(
+  'project:save',
+  async (_e, data: ProjectFile, suggestedPath: string): Promise<string | null> => {
+    const result = await dialog.showSaveDialog({
+      defaultPath: suggestedPath,
+      filters: [{ name: 'Media Whiteboard project', extensions: [PROJECT_EXTENSION] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    await fsp.writeFile(result.filePath, JSON.stringify(data, null, 2), 'utf8');
+    return result.filePath;
+  },
+);
+
+ipcMain.handle('project:open', async (): Promise<ProjectLoadResult> => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [{ name: 'Media Whiteboard project', extensions: [PROJECT_EXTENSION] }],
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return { ok: false, cancelled: true, error: null };
+  }
+  const file = result.filePaths[0]!;
+  try {
+    const data = JSON.parse(await fsp.readFile(file, 'utf8')) as ProjectFile;
+    return { ok: true, path: file, data };
+  } catch (err) {
+    return { ok: false, cancelled: false, error: `Could not read ${file}: ${String(err)}` };
+  }
+});
+
+/** §13: a layer whose source file has vanished is dropped, not prompted for. */
+ipcMain.handle('project:checkSources', async (_e, sourcePaths: string[]): Promise<string[]> => {
+  const missing: string[] = [];
+  for (const source of sourcePaths) {
+    try {
+      await fsp.access(source);
+    } catch {
+      missing.push(source);
+    }
+  }
+  return missing;
+});
 
 ipcMain.handle('cache:info', cacheInfo);
 ipcMain.handle('cache:clear', async (): Promise<CacheInfo> => {

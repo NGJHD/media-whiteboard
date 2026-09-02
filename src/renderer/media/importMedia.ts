@@ -1,4 +1,5 @@
 import type { MediaObject } from '../../shared/doc';
+import type { MediaMeta } from '../../shared/ipc';
 import { clampRectToWorld, objectBounds, WORLD_MAX, WORLD_MIN } from '../../shared/doc';
 import { useStore } from '../state/store';
 import { load } from './bitmapCache';
@@ -21,6 +22,60 @@ export interface DropPoint {
   y: number;
 }
 
+/**
+ * Turns decoded metadata into a placed object. Shared by file drops and by
+ * clipboard pastes (§11), so both follow the same §7 placement rules.
+ */
+export function importMetaAsObject(meta: MediaMeta, at: DropPoint, offset = 0): MediaObject {
+  const store = useStore.getState();
+  const { canvasRect } = store.doc;
+
+  // Scale down to fit the canvas, never up (§7).
+  const fit = Math.min(canvasRect.width / meta.nativeWidth, canvasRect.height / meta.nativeHeight, 1);
+
+  const object: MediaObject = {
+    id: newId(),
+    kind: 'media',
+    x: at.x + offset,
+    y: at.y + offset,
+    width: meta.nativeWidth * fit,
+    height: meta.nativeHeight * fit,
+    rotation: 0,
+    opacity: 1,
+    sourcePath: meta.sourcePath,
+    cacheKey: meta.cacheKey,
+    frameCount: meta.frameCount,
+    frameDurationsMs: meta.frameDurationsMs,
+    nativeWidth: meta.nativeWidth,
+    nativeHeight: meta.nativeHeight,
+  };
+
+  // A drop bigger than the whole world cannot be clamped, only shrunk.
+  const worldSize = WORLD_MAX - WORLD_MIN;
+  if (object.width > worldSize || object.height > worldSize) {
+    const shrink = Math.min(worldSize / object.width, worldSize / object.height);
+    object.width *= shrink;
+    object.height *= shrink;
+  }
+
+  // §4: hard clamp into the world rather than allowing an out-of-bounds drop.
+  const bounds = objectBounds(object);
+  const clamped = clampRectToWorld(bounds);
+  object.x += clamped.x - bounds.x;
+  object.y += clamped.y - bounds.y;
+
+  store.apply('Add media', (draft) => {
+    draft.objects.push(object);
+  });
+  useStore.getState().setSelection([object.id]);
+
+  // Decode the first frame so something appears immediately; the preview loop
+  // pulls the rest in as it cycles.
+  void load(meta.cacheKey, 0);
+
+  return object;
+}
+
 export async function importFiles(paths: string[], at: DropPoint): Promise<void> {
   const store = useStore.getState();
   const failures: string[] = [];
@@ -36,62 +91,7 @@ export async function importFiles(paths: string[], at: DropPoint): Promise<void>
       continue;
     }
 
-    const { meta } = result;
-    const { canvasRect } = useStore.getState().doc;
-
-    // Scale down to fit the canvas, never up (§7).
-    const fit = Math.min(
-      canvasRect.width / meta.nativeWidth,
-      canvasRect.height / meta.nativeHeight,
-      1,
-    );
-    const width = meta.nativeWidth * fit;
-    const height = meta.nativeHeight * fit;
-
-    const object: MediaObject = {
-      id: newId(),
-      kind: 'media',
-      x: at.x + offset,
-      y: at.y + offset,
-      width,
-      height,
-      rotation: 0,
-      opacity: 1,
-      sourcePath: meta.sourcePath,
-      cacheKey: meta.cacheKey,
-      frameCount: meta.frameCount,
-      frameDurationsMs: meta.frameDurationsMs,
-      nativeWidth: meta.nativeWidth,
-      nativeHeight: meta.nativeHeight,
-    };
-
-    // §4: hard clamp into the world rather than allowing an out-of-bounds drop.
-    const bounds = objectBounds(object);
-    const clamped = clampRectToWorld(bounds);
-    object.x += clamped.x - bounds.x;
-    object.y += clamped.y - bounds.y;
-
-    // A drop bigger than the whole world cannot be clamped, only shrunk.
-    if (object.width > WORLD_MAX - WORLD_MIN || object.height > WORLD_MAX - WORLD_MIN) {
-      const shrink = Math.min(
-        (WORLD_MAX - WORLD_MIN) / object.width,
-        (WORLD_MAX - WORLD_MIN) / object.height,
-      );
-      object.width *= shrink;
-      object.height *= shrink;
-    }
-
-    store.apply('Add media', (draft) => {
-      draft.objects.push(object);
-    });
-    useStore.getState().setSelection([object.id]);
-
-    // Decode the first frame so something appears immediately; the preview loop
-    // pulls the rest in as it cycles.
-    void load(meta.cacheKey, 0).then(() => {
-      useStore.getState().setPreviewFrame(useStore.getState().previewFrame);
-    });
-
+    importMetaAsObject(result.meta, at, offset);
     offset += 24;
   }
 

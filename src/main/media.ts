@@ -381,3 +381,47 @@ export async function clearCache(cacheDir: string): Promise<void> {
     await fsp.rm(path.join(cacheDir, entry.key), { recursive: true, force: true }).catch(() => {});
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Clipboard images (§11)                                                     */
+/* -------------------------------------------------------------------------- */
+
+const CLIPBOARD_EXTENSIONS: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'image/bmp': '.bmp',
+};
+
+/**
+ * Writes clipboard bytes to a file so the ordinary §7 import path handles them,
+ * rather than growing a second decode route that could drift from the first.
+ *
+ * The file lives in the cache directory and is named by content hash, so pasting
+ * the same image twice reuses the cache entry instead of decoding again.
+ */
+export async function importClipboardImage(
+  cacheDir: string,
+  bytes: Buffer,
+  mimeType: string,
+): Promise<ImportResult> {
+  const ext = CLIPBOARD_EXTENSIONS[mimeType];
+  if (!ext) return { ok: false, error: `Clipboard image type ${mimeType} is not supported.` };
+
+  const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 16);
+  const dir = path.join(cacheDir, 'pasted');
+  await fsp.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${hash}${ext}`);
+
+  try {
+    await fsp.writeFile(file, bytes, { flag: 'wx' });
+  } catch (err) {
+    // EEXIST just means this image was pasted before; anything else is real.
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+      return { ok: false, error: `Could not stage the clipboard image: ${String(err)}` };
+    }
+  }
+
+  return importMedia({ cacheDir, sourcePath: file });
+}

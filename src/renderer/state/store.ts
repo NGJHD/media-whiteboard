@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { applyPatches, enablePatches, produceWithPatches, type Patch } from 'immer';
 import type { Doc, LayerId, Rect, SceneObject } from '../../shared/doc';
 import { createEmptyDoc } from '../../shared/doc';
+import { PROJECT_SCHEMA_VERSION, PROJECT_EXTENSION } from '../../shared/ipc';
 import { computeDirtyRect, replay } from '../paint/paintBuffer';
 
 enablePatches();
@@ -50,6 +51,10 @@ interface State {
   toasts: Toast[];
   /** System font families (§10). Empty until enumeration finishes. */
   fonts: string[];
+  /** The text object being edited in place, if any (§10). */
+  editingTextId: LayerId | null;
+  /** Path of the open project, so Ctrl+S can suggest it again (§13). */
+  projectPath: string | null;
 
   undoStack: HistoryEntry[];
   redoStack: HistoryEntry[];
@@ -81,6 +86,9 @@ interface State {
   toast(kind: Toast['kind'], message: string, detail?: string): void;
   dismissToast(id: number): void;
   setFonts(fonts: string[]): void;
+  setEditingText(id: LayerId | null): void;
+  saveProject(): Promise<void>;
+  openProject(): Promise<void>;
 
   selectedObjects(): SceneObject[];
 }
@@ -100,6 +108,8 @@ export const useStore = create<State>((set, get) => ({
   viewport: { width: 0, height: 0 },
   toasts: [],
   fonts: [],
+  editingTextId: null,
+  projectPath: null,
   undoStack: [],
   redoStack: [],
   previewFrame: 0,
@@ -253,6 +263,97 @@ export const useStore = create<State>((set, get) => ({
 
   setFonts(fonts) {
     set({ fonts });
+  },
+
+  setEditingText(editingTextId) {
+    set({ editingTextId, revision: get().revision + 1 });
+  },
+
+  /**
+   * §13: the full Doc plus the paint stroke list and absolute source paths,
+   * with a schemaVersion from day one.
+   */
+  async saveProject() {
+    const state = get();
+    const suggested =
+      state.projectPath ??
+      state.doc.outputPath.replace(/\.(webp|gif)$/i, '') + `.${PROJECT_EXTENSION}`;
+
+    try {
+      const saved = await window.api.saveProject(
+        { schemaVersion: PROJECT_SCHEMA_VERSION, doc: state.doc },
+        suggested,
+      );
+      if (!saved) return;
+      set({ projectPath: saved });
+      get().toast('info', `Saved ${saved}`);
+    } catch (err) {
+      get().toast('error', `Could not save: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+
+  async openProject() {
+    const result = await window.api.openProject();
+    if (!result.ok) {
+      if (!result.cancelled && result.error) get().toast('error', result.error);
+      return;
+    }
+
+    if (result.data.schemaVersion > PROJECT_SCHEMA_VERSION) {
+      get().toast(
+        'error',
+        `That project was written by a newer version (schema ${result.data.schemaVersion}).`,
+      );
+      return;
+    }
+
+    const doc = result.data.doc as Doc;
+
+    // §13: drop layers whose source has vanished, with one summary warning.
+    // Never prompt for relocation, never block the load.
+    const sources = doc.objects.filter((o) => o.kind === 'media').map((o) => o.sourcePath);
+    const missing = new Set(await window.api.checkSources(sources));
+    const kept = doc.objects.filter((o) => o.kind !== 'media' || !missing.has(o.sourcePath));
+
+    // §10: a referenced font that is not installed falls back to the default.
+    const available = get().fonts;
+    const missingFonts = new Set<string>();
+    for (const obj of kept) {
+      if (obj.kind !== 'text') continue;
+      if (available.length > 0 && !available.includes(obj.fontFamily)) {
+        missingFonts.add(obj.fontFamily);
+        obj.fontFamily = available.includes('Segoe UI') ? 'Segoe UI' : (available[0] ?? obj.fontFamily);
+      }
+    }
+
+    const loaded: Doc = { ...doc, objects: kept };
+
+    set({
+      doc: loaded,
+      projectPath: result.path,
+      selection: [],
+      undoStack: [],
+      redoStack: [],
+      revision: get().revision + 1,
+    });
+    replay(loaded.paint);
+    get().fitToWindow();
+
+    // §13: one summary warning listing every dropped file, not one each.
+    if (missing.size > 0) {
+      get().toast(
+        'warn',
+        `${missing.size} layer${missing.size === 1 ? '' : 's'} dropped — source file missing.`,
+        [...missing].join('\n'),
+      );
+    }
+    if (missingFonts.size > 0) {
+      get().toast(
+        'warn',
+        `Missing font${missingFonts.size === 1 ? '' : 's'}, using the default.`,
+        [...missingFonts].join('\n'),
+      );
+    }
   },
 
   selectedObjects() {

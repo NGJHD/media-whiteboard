@@ -55,6 +55,19 @@ export type ImportResult =
   | { ok: true; meta: MediaMeta }
   | { ok: false; error: string };
 
+/** §13: the project file. `schemaVersion` is present from day one. */
+export interface ProjectFile {
+  schemaVersion: number;
+  doc: unknown;
+}
+
+export const PROJECT_SCHEMA_VERSION = 1;
+export const PROJECT_EXTENSION = 'mwproj';
+
+export type ProjectLoadResult =
+  | { ok: true; path: string; data: ProjectFile }
+  | { ok: false; cancelled: boolean; error: string | null };
+
 export interface CacheInfo {
   dir: string;
   bytes: number;
@@ -146,6 +159,13 @@ export interface Api {
   /** Resolves the OS path of a dropped File (Electron removed File.path). */
   pathForFile(file: File): string;
   importMedia(sourcePath: string): Promise<ImportResult>;
+  /** §11: Ctrl+V with an image on the clipboard. Bytes are written to a temp
+   *  file first, so the normal §7 import path handles it unchanged. */
+  importClipboardImage(bytes: number[], mimeType: string): Promise<ImportResult>;
+  saveProject(data: ProjectFile, suggestedPath: string): Promise<string | null>;
+  openProject(): Promise<ProjectLoadResult>;
+  /** Returns the subset of paths that no longer exist (§13). */
+  checkSources(sourcePaths: string[]): Promise<string[]>;
   openMediaDialog(): Promise<string[]>;
   getCacheInfo(): Promise<CacheInfo>;
   clearCache(): Promise<CacheInfo>;
