@@ -1,6 +1,8 @@
 import Konva from 'konva';
 import type { Doc, Rect } from '../../shared/doc';
-import { objectBounds } from '../../shared/doc';
+import { baseName, objectBounds } from '../../shared/doc';
+import { hasDrawn } from '../media/bitmapCache';
+import { usesProxy } from '../scene/buildScene';
 import type { ViewTransform } from '../state/store';
 
 /**
@@ -10,6 +12,10 @@ import type { ViewTransform } from '../state/store';
  * `buildScene`, which export also calls. Checkerboard, out-of-canvas grey,
  * selection handles and snap guides all live on this layer and only this layer.
  */
+
+const UI_FONT = "'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif";
+const PLACEHOLDER_FILL = '#2b2f36';
+const PLACEHOLDER_TEXT = '#9aa1ad';
 
 const CHECKER_SIZE = 10;
 const CHECKER_LIGHT = '#3a3f47';
@@ -57,6 +63,23 @@ function toScreen(view: ViewTransform, rect: Rect): Rect {
     width: rect.width * view.scale,
     height: rect.height * view.scale,
   };
+}
+
+/** A centred label inside a screen-space rect, clipped to it rather than spilling. */
+function centredLabel(rect: Rect, text: string, fontSize: number): Konva.Text {
+  return new Konva.Text({
+    x: rect.x + 8,
+    y: rect.y + rect.height / 2 - fontSize,
+    width: Math.max(0, rect.width - 16),
+    text,
+    fontFamily: UI_FONT,
+    fontSize,
+    fill: PLACEHOLDER_TEXT,
+    align: 'center',
+    wrap: 'none',
+    ellipsis: true,
+    listening: false,
+  });
 }
 
 export function drawOverlay(layer: Konva.Layer, state: OverlayState): void {
@@ -115,6 +138,28 @@ export function drawOverlay(layer: Konva.Layer, state: OverlayState): void {
       listening: false,
     }),
   );
+
+  // 3b. Placeholders (§9). Chrome, so they live here and can never reach the
+  //     output — buildScene knows nothing about either of them.
+  //
+  //     A media layer with no decoded frame draws nothing at all, which looked
+  //     like an empty rectangle with handles for as long as the decode took.
+  //     Say what it is waiting for instead.
+  for (const obj of doc.objects) {
+    if (obj.kind !== 'media') continue;
+    if (hasDrawn(obj.cacheKey, usesProxy(obj, true))) continue;
+
+    const bounds = toScreen(view, objectBounds(obj));
+    layer.add(new Konva.Rect({ ...bounds, fill: PLACEHOLDER_FILL, listening: false }));
+    const size = Math.max(11, Math.min(15, bounds.height / 6));
+    layer.add(centredLabel(bounds, `Loading ${baseName(obj.sourcePath)}…`, size));
+  }
+
+  //     And an empty document says how to start, rather than showing a blank
+  //     rectangle and leaving the user to guess.
+  if (doc.objects.length === 0 && doc.paint.dirtyRect === null) {
+    layer.add(centredLabel(canvas, 'Drop a media file to get started', 15));
+  }
 
   // 4. Selection outlines and handles.
   const selected = doc.objects.filter(

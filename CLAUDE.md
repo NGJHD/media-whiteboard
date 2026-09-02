@@ -241,6 +241,11 @@ or trimming to fit never resamples or crops paint.
 6. Decode the rest **in the background** (see below).
 7. The canvas is **never** auto-resized to match dropped media.
 
+**The first frame a layer decodes becomes its fallback immediately**, before
+anything has drawn it. During phase one the only frame on disk is index 0, while
+the preview asks for whatever index the wall clock has reached — so without this
+a dropped clip draws nothing at all until the background decode publishes.
+
 **A drop must never block the UI.** Nothing waits for the full decode: the object
 is on the canvas, selected and manipulable, as soon as one frame exists. While the
 rest decodes, show a **non-blocking progress bar per pending item** inside the
@@ -488,6 +493,19 @@ value to every member as a single undo entry.
 
 Transparent background renders as a checkerboard in the viewport. Outside `canvasRect`
 the viewport is a flat neutral grey so the canvas boundary is unambiguous.
+
+### Placeholders
+
+Both are preview chrome and live on the overlay layer, so neither can reach the
+output (§3).
+
+- **A media layer with no decoded frame** draws a dark grey rectangle over its
+  bounds with `Loading <file name>…` centred in it. A layer with nothing to draw
+  is otherwise indistinguishable from an empty selection rectangle, and the
+  first frame of a cold drop, a project load or an evicted layer is not always
+  instant.
+- **An empty document** — no objects and no paint — centres
+  `Drop a media file to get started` in `canvasRect`.
 
 ---
 

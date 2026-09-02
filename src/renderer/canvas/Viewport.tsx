@@ -72,8 +72,15 @@ export function Viewport() {
     // is not in the store, so a test that drives real pointer events has no
     // other way to see it. Vite strips this from production builds.
     if (import.meta.env.DEV) {
-      (window as unknown as Record<string, unknown>).__mwProxyRect = (id: string) =>
-        interaction.proxyPosition(id);
+      const hooks = window as unknown as Record<string, unknown>;
+      hooks.__mwProxyRect = (id: string) => interaction.proxyPosition(id);
+      // What the overlay is currently saying. The §9 placeholders are Konva
+      // text on a chrome layer, so there is no DOM for a test to read.
+      hooks.__mwOverlayText = () =>
+        overlay
+          .getChildren()
+          .filter((node) => node.className === 'Text')
+          .map((node) => (node as Konva.Text).text());
     }
 
     /* ---- selection on empty space and marquee (§10, §11) ---------------- */

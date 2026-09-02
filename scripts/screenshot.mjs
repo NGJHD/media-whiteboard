@@ -68,6 +68,30 @@ const cases = [
     setter.call(ta, ['Media Whiteboard', 'second line', 'third line'].join(String.fromCharCode(10)));
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   `],
+  // §9 placeholders: an empty document, and a layer whose frames have not
+  // arrived. The pending layer is faked with a cache key that matches nothing,
+  // because a real decode is over before a screenshot can catch it.
+  ['empty-canvas', `
+    store.getState().setTool('select');
+    store.getState().apply('clear', (d) => {
+      d.objects = [];
+      d.paint = { strokes: [], dirtyRect: null };
+    });
+  `],
+  ['loading-layer', `
+    store.getState().setTool('select');
+    store.getState().apply('pending', (d) => {
+      d.objects = [{
+        id: 'pending', kind: 'media', x: -180, y: 0, width: 420, height: 300,
+        rotation: 0, opacity: 1,
+        sourcePath: ['C:', 'clips', 'trim.mkv'].join(String.fromCharCode(92)),
+        cacheKey: 'abcdef0123456789', frameCount: 120,
+        frameDurationsMs: new Array(120).fill(16.7),
+        nativeWidth: 1080, nativeHeight: 2520,
+      }];
+    });
+    store.getState().setSelection(['pending']);
+  `],
   // §7's non-blocking decode bars. Driven directly: the fixtures decode far too
   // fast to catch one in flight.
   ['loading', `

@@ -1,6 +1,7 @@
 import type { MediaObject } from '../../shared/doc';
 import type { MediaMeta } from '../../shared/ipc';
 import {
+  baseName,
   clampRectToWorld,
   objectBounds,
   previewProxySize,
@@ -21,11 +22,6 @@ import { load } from './bitmapCache';
 
 function newId(): string {
   return crypto.randomUUID();
-}
-
-/** Windows and POSIX separators both appear here; only the last segment matters. */
-function baseName(sourcePath: string): string {
-  return sourcePath.split(/[\/]/).pop() ?? sourcePath;
 }
 
 export interface DropPoint {

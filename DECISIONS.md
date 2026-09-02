@@ -637,3 +637,55 @@ both dimensions rather than the whole of it. Still never scales up.
 rule scaled every one of them to fill the canvas exactly — each drop covered
 everything already on it. Half leaves the composition visible and is still large
 enough to work with; anything genuinely small keeps its native size.
+
+---
+
+## D-032 — The first decoded frame is a layer's fallback straight away
+
+**Decision**: `load` registers a layer's first decoded frame as its
+`lastDrawn` fallback, rather than waiting for something to `peek` it.
+
+**Why**: a dropped clip showed an empty rectangle with handles for the whole
+background decode — around ten seconds for a 17 s source.
+
+Phase one puts exactly one frame on disk, at index 0. The preview does not ask
+for index 0: it asks for whatever index the wall clock has reached, which for a
+1020-frame loop is essentially arbitrary. That misses, so `peekOrLast` looks for
+a fallback — and the fallback was only ever set by `peek`, which had never
+succeeded for that layer. Nothing was drawn until the full decode published.
+
+Registering it in `load` fixes the whole class: any layer with a decoded frame
+has something to draw, whatever index is asked for. It costs one map write per
+layer.
+
+---
+
+## D-033 — Placeholders are overlay chrome
+
+**Decision**: the "Loading <file>…" box and the "Drop a media file to get
+started" line are drawn in `drawOverlay`, not in `buildScene`.
+
+**Why**: §3's rule is that nothing affecting output pixels may live on the
+overlay, and the corollary is that everything which must *not* affect them
+belongs there. Both of these would otherwise be composited into an export — a
+grey rectangle labelled with a filename, burned into someone's WebP.
+
+It also means neither needs a flag threaded through `buildScene`: the overlay
+already has the document and the view transform, and asks the bitmap cache
+whether a layer has anything to draw.
+
+The loading box appears only when the layer has **no** frame at all. Once phase
+one's frame is standing in (D-032) the layer is showing real content, and the
+§7 progress bar covers the rest — laying "Loading" over a visible frame would be
+worse than saying nothing.
+
+---
+
+## D-034 — `baseName` is defined once
+
+**Decision**: one `baseName` in `shared/doc.ts`.
+
+**Why**: it existed twice, and both copies had lost the backslash out of their
+character class in editing — so on the only platform this app targets, neither
+split anything. The import progress bar had been labelling every job with a full
+absolute path. Two copies of a three-line function is how that happens twice.

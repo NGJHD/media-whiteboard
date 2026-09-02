@@ -346,6 +346,117 @@ console.log('=== the preview survives cache eviction (§7, §11) ===');
   }
 }
 
+/* -- 6. Placeholders say what is happening (§9) ---------------------------- */
+
+console.log('');
+console.log('=== placeholders (§9) ===');
+{
+  const fixture = JSON.stringify(path.join(root, 'test-fixtures', 'static.png'));
+  const result = await harness.run(`
+    (async () => {
+      const store = window.__mwStore;
+      const { importFiles } = await import('/media/importMedia.ts');
+      const settle = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 120)));
+
+      await settle();
+      const empty = window.__mwOverlayText();
+
+      // A layer whose frames will never arrive: a well-formed cache key that
+      // matches nothing on disk. This is the state a drop passes through, and
+      // the state a project load lands in while its media is still cold.
+      store.getState().apply('pending layer', (d) => {
+        d.objects.push({
+          id: 'pending', kind: 'media', x: 0, y: 0, width: 200, height: 200,
+          rotation: 0, opacity: 1,
+          // Built from a char code, not an escape: this source passes through a
+          // template literal on its way to the renderer, which would eat the
+          // backslashes and leave nothing for baseName to split on.
+          sourcePath: ['C:', 'clips', 'holiday-clip.mkv'].join(String.fromCharCode(92)),
+          cacheKey: 'abcdef0123456789',
+          frameCount: 120,
+          frameDurationsMs: new Array(120).fill(16.7),
+          nativeWidth: 1080, nativeHeight: 1920,
+        });
+      });
+      await settle();
+      const pending = window.__mwOverlayText();
+
+      // A real one, once decoded, must not be labelled.
+      store.getState().apply('clear', (d) => { d.objects = []; });
+      await importFiles([${fixture}], { x: 0, y: 0 });
+      await window.__mwIdle();
+      await settle();
+      const loaded = window.__mwOverlayText();
+
+      return { ok: true, empty, pending, loaded };
+    })()
+  `);
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.check('an empty canvas says how to start', result.empty, [
+      'Drop a media file to get started',
+    ]);
+    c.check('a layer with no frame names what it is waiting for', result.pending, [
+      'Loading holiday-clip.mkv…',
+    ]);
+    c.check('and a decoded layer is not labelled', result.loaded, []);
+  }
+}
+
+/* -- 7. A layer draws before its decode finishes (§7) ---------------------- */
+
+console.log('');
+console.log('=== a dropped clip draws during its decode (§7) ===');
+{
+  // A fresh copy, so this is a cold import with a real background decode.
+  const clip = path.join(workDir, `phase-one-${Date.now()}.avi`);
+  fs.copyFileSync(ensureLargeClip(), clip);
+
+  const result = await harness.run(
+    `
+    (async () => {
+      const store = window.__mwStore;
+      const { importFiles } = await import('/media/importMedia.ts');
+      const cache = await import('/media/bitmapCache.ts');
+      const { usesProxy } = await import('/scene/buildScene.ts');
+
+      // Deliberately not awaiting __mwIdle: this is the phase-one window.
+      await importFiles([${JSON.stringify(clip)}], { x: 0, y: 0 });
+      const obj = store.getState().doc.objects[0];
+      const proxy = usesProxy(obj, true);
+
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 150)));
+
+      return {
+        ok: true,
+        stillDecoding: store.getState().imports.length,
+        drawnDuringDecode: cache.hasDrawn(obj.cacheKey, proxy),
+        overlay: window.__mwOverlayText(),
+      };
+    })()
+  `,
+    { timeoutMs: 180_000 },
+  );
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.check('the decode is still running', result.stillDecoding, 1);
+    // Only frame 0 exists during phase one, but the preview asks for whatever
+    // index the wall clock has reached. Without the first decoded frame
+    // standing in, the layer drew nothing at all until the decode published —
+    // an empty rectangle with handles, for the whole ten seconds.
+    c.check('the layer already has a frame to draw', result.drawnDuringDecode, true);
+    c.check('so it is not labelled as loading', result.overlay, []);
+  }
+
+  fs.rmSync(clip, { force: true });
+}
+
 await harness.stop();
 console.log(c.failures === 0 ? '\nAll preview smoke tests passed.' : `\n${c.failures} failed.`);
 process.exit(c.failures === 0 ? 0 : 1);

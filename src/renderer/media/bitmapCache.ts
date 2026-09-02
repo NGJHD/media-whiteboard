@@ -127,7 +127,14 @@ export async function load(
       const bitmap = await createImageBitmap(await response.blob());
 
       const bytes = bitmap.width * bitmap.height * 4;
-      entries.set(key, { bitmap, bytes, layer: layerKey(cacheKey, proxy) });
+      const layer = layerKey(cacheKey, proxy);
+      entries.set(key, { bitmap, bytes, layer });
+      // The first frame a layer decodes becomes its fallback straight away,
+      // without waiting to be drawn. During §7's phase one the only frame on
+      // disk is index 0, while the preview asks for whatever index the wall
+      // clock has reached — so nothing was ever drawn, and a dropped clip sat
+      // blank for the whole background decode.
+      if (!lastDrawn.has(layer)) lastDrawn.set(layer, bitmap);
       totalBytes += bytes;
       evictTo(BUDGET_BYTES);
       return bitmap;
@@ -158,6 +165,12 @@ export function evictEntry(cacheKey: string): void {
     entries.delete(key);
     totalBytes -= entry.bytes;
   }
+}
+
+/** Whether this layer has any frame to draw yet — what the §9 placeholder asks. */
+export function hasDrawn(cacheKey: string, proxy = false): boolean {
+  const bitmap = lastDrawn.get(layerKey(cacheKey, proxy));
+  return Boolean(bitmap && alive(bitmap));
 }
 
 export function stats(): { bytes: number; frames: number; budget: number } {

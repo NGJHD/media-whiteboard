@@ -182,6 +182,17 @@ export function createEmptyDoc(outputPath: string): Doc {
 /* Geometry helpers                                                           */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The file name at the end of a source path.
+ *
+ * Defined once because it was defined twice, and both copies lost the backslash
+ * out of their character class — so on the only platform this app targets, every
+ * "name" in the UI was the whole path.
+ */
+export function baseName(sourcePath: string): string {
+  return sourcePath.split(/[\\/]/).pop() ?? sourcePath;
+}
+
 /** Axis-aligned bounds of an object, accounting for rotation about its centre. */
 export function objectBounds(obj: SceneObject): Rect {
   const rad = (obj.rotation * Math.PI) / 180;
