@@ -232,8 +232,11 @@ or trimming to fit never resamples or crops paint.
 2. **Reject** any source longer than **30 seconds** with a toast. Reject unsupported
    or corrupt files with a toast. Both cases: ignore the file, do not add a layer.
 3. Decode **one frame**, and place the object with it.
-4. Place the object **centered at the cursor**, at native size. If native size exceeds
-   `canvasRect` in either dimension, scale down proportionally to fit. Never scale up.
+4. Place the object **centered at the cursor**, sized to fit within **half** of
+   `canvasRect` in both dimensions. Scale down proportionally to reach that;
+   never scale up, so anything already smaller is left at native size.
+   Fitting the whole canvas meant every photo-sized drop covered everything
+   already on it.
 5. Switch back to the Select tool, so the new object can be moved immediately.
 6. Decode the rest **in the background** (see below).
 7. The canvas is **never** auto-resized to match dropped media.
@@ -281,6 +284,24 @@ Write a sibling `meta.json` with `frameCount`, `frameDurationsMs[]`,
 renderer can decode the file as it stands — png, jpg, bmp, webp, gif — copy it
 into the entry and let `createImageBitmap` do the work. Encoding it first buys a
 different container for the slowest step in the whole import.
+
+**Animated layers are previewed from reduced-resolution proxy frames.** A second
+output on the same decode pass writes each frame again scaled to a **320 px short
+side**, into `<entry>/proxy/`. The preview draws those; **export reads the native
+frames and never sees a proxy**. This is the only substitution the preview is
+allowed to make, and it is resolution only — same node, same geometry, same
+order, so §3's single construction path is intact.
+
+Why it is needed: a 17 s 1080x2520 clip is ~11 GB of decoded bitmaps against a
+512 MB budget, so nearly every preview frame is a cache miss, and a native frame
+costs ~15 ms to decode — nowhere near enough for 60 fps. The proxy is ~54 KB on
+disk and ~1 ms to decode, so misses stop mattering. The second output costs about
+13% of the decode (8.4 s to 9.5 s on that clip) and about 5% more disk.
+
+Stills do not get proxies. A still decodes once and is then drawn every frame for
+free, so there is no churn to spare and softening it would be a pure loss. Nor do
+sources whose short side is less than twice the target: below that the second
+decode output and the extra disk cost more than they save.
 
 **Cache frames must be cheap to write, not small.** This is the single biggest
 cost in an import, and the encoder choice dominates it. Measured on the reference

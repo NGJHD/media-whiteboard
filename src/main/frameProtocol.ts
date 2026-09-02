@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { FRAME_SCHEME } from '../shared/ipc';
-import { firstFramePath } from './media';
+import { firstFramePath, proxyDir } from './media';
 
 /**
  * Serves decoded cache frames to the renderer over a custom scheme (§7).
@@ -67,7 +67,9 @@ export function forgetFrameExtension(cacheKey: string): void {
 export function serveFrames(getCacheDir: () => string): void {
   protocol.handle(FRAME_SCHEME, async (request) => {
     const url = new URL(request.url);
-    // mwframe://frame/<cacheKey>/<index>
+    // mwframe://frame/<cacheKey>/<index> — native frames, what export reads.
+    // mwframe://proxy/<cacheKey>/<index> — reduced-resolution preview frames.
+    const wantsProxy = url.host === 'proxy';
     const [cacheKey, rawIndex] = url.pathname.replace(/^\//, '').split('/');
     const index = Number(rawIndex);
 
@@ -78,7 +80,7 @@ export function serveFrames(getCacheDir: () => string): void {
     }
 
     const cacheDir = getCacheDir();
-    const dir = path.join(cacheDir, cacheKey);
+    const dir = wantsProxy ? proxyDir(cacheDir, cacheKey) : path.join(cacheDir, cacheKey);
     const name = String(index + 1).padStart(6, '0');
 
     // corsEnabled means Chromium enforces CORS on this scheme, so the response
@@ -97,6 +99,19 @@ export function serveFrames(getCacheDir: () => string): void {
         },
       });
     };
+
+    // Proxies are always encoded, so their extension is never in question. Only
+    // the native set can be a copied source in its own container.
+    if (wantsProxy) {
+      const hit = await serve(path.join(dir, `${name}.png`), '.png');
+      if (hit) return hit;
+      if (index === 0) {
+        const first = firstFramePath(cacheDir, cacheKey);
+        const stand = await serve(first, path.extname(first));
+        if (stand) return stand;
+      }
+      return new Response('not found', { status: 404 });
+    }
 
     const known = entryExtensions.get(cacheKey);
     if (known) {

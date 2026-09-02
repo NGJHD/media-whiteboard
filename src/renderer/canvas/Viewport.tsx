@@ -302,17 +302,19 @@ export function Viewport() {
       // preview is what asks for those frames, and it keeps redrawing while any
       // are outstanding so they appear as soon as they land.
       let missing = false;
-      for (const need of framesNeededAt(state.doc, frame)) {
-        if (peek(need.cacheKey, need.index)) continue;
+      for (const need of framesNeededAt(state.doc, frame, true)) {
+        if (peek(need.cacheKey, need.index, need.proxy)) continue;
         missing = true;
-        void load(need.cacheKey, need.index);
+        void load(need.cacheKey, need.index, need.proxy);
       }
 
       if (!plan.isStatic) {
         for (let ahead = 1; ahead <= PREFETCH_FRAMES; ahead += 1) {
           const future = (frame + ahead) % plan.frameCount;
-          for (const need of framesNeededAt(state.doc, future)) {
-            if (!peek(need.cacheKey, need.index)) void load(need.cacheKey, need.index);
+          for (const need of framesNeededAt(state.doc, future, true)) {
+            if (!peek(need.cacheKey, need.index, need.proxy)) {
+              void load(need.cacheKey, need.index, need.proxy);
+            }
           }
         }
       }
@@ -335,6 +337,9 @@ export function Viewport() {
       content.destroyChildren();
       const group = buildScene(state.doc, frame, {
         clipToCanvas: false,
+        // §7: animated layers draw from their preview frames. Resolution only —
+        // export reads the native ones.
+        proxies: true,
         // The in-place editor sits exactly over this node (§10); drawing both
         // would double up the glyphs. Export never sets this — the UI is
         // blocked during export, so nothing can be mid-edit.

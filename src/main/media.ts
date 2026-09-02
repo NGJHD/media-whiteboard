@@ -4,7 +4,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { binaries } from './ffmpeg';
-import { MAX_SOURCE_SECONDS } from '../shared/doc';
+import { MAX_SOURCE_SECONDS, PREVIEW_PROXY_SHORT_SIDE, previewProxySize } from '../shared/doc';
 import {
   MEDIA_META_VERSION,
   type ImportResult,
@@ -55,6 +55,23 @@ const DIRECTLY_RENDERABLE = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.webp', '
 
 /** What a decoded animated frame is written as. See the note at the top. */
 const FRAME_EXTENSION = '.png';
+
+/** §7: reduced-resolution preview frames live in their own subdirectory. */
+const PROXY_DIR = 'proxy';
+
+export function proxyDir(cacheDir: string, key: string): string {
+  return path.join(entryDir(cacheDir, key), PROXY_DIR);
+}
+
+/**
+ * `scale` targeting the **short** side, whichever it is. A portrait clip's short
+ * side is its width and a landscape clip's is its height, so a fixed `-1:N`
+ * would shrink one of them far past the target.
+ */
+function proxyScaleFilter(): string {
+  const n = String(PREVIEW_PROXY_SHORT_SIDE);
+  return `scale='if(gt(iw,ih),-1,${n})':'if(gt(iw,ih),${n},-1)'`;
+}
 
 /**
  * Formats whose frames carry individually meaningful delays, so the timings have
@@ -293,6 +310,17 @@ async function readMeta(cacheDir: string, key: string): Promise<MediaMeta | null
     const files = await fsp.readdir(entryDir(cacheDir, key));
     const frames = files.filter((f) => f.endsWith(meta.frameExt)).length;
     if (frames !== meta.frameCount) return null;
+
+    // The proxy set is derived from the same rule the renderer uses, so an entry
+    // missing the proxies it should have would leave the preview with nothing
+    // to draw. Treat it as a miss.
+    if (previewProxySize(meta.nativeWidth, meta.nativeHeight, meta.frameCount)) {
+      const proxies = await fsp.readdir(proxyDir(cacheDir, key)).catch(() => [] as string[]);
+      if (proxies.filter((f) => f.endsWith(FRAME_EXTENSION)).length !== meta.frameCount) {
+        return null;
+      }
+    }
+
     return { ...meta, complete: true, readyFrames: meta.frameCount };
   } catch {
     return null;
@@ -317,13 +345,24 @@ function frameEncoder(): string[] {
  * Phase one: one frame, as fast as ffmpeg can produce it. This is what the drop
  * waits on, so it must never scan the whole file.
  */
-async function decodeFirstFrame(sourcePath: string, outFile: string): Promise<void> {
+async function decodeFirstFrame(
+  sourcePath: string,
+  outFile: string,
+  proxy: boolean,
+): Promise<void> {
   const { ffmpeg } = binaries();
   await fsp.mkdir(path.dirname(outFile), { recursive: true });
   try {
     await execFileAsync(
       ffmpeg,
-      ['-y', '-i', sourcePath, '-an', '-frames:v', '1', ...frameEncoder(), outFile],
+      [
+        '-y', '-i', sourcePath, '-an', '-frames:v', '1',
+        // At proxy size when that is what the preview will ask for: this frame
+        // exists only to stand in until the full decode publishes.
+        ...(proxy ? ['-vf', proxyScaleFilter()] : []),
+        ...frameEncoder(),
+        outFile,
+      ],
       { maxBuffer: 16 * 1024 * 1024 },
     );
   } catch (err) {
@@ -356,6 +395,7 @@ async function decodeAll(
   sourcePath: string,
   dir: string,
   isStatic: boolean,
+  proxy: { width: number; height: number } | null,
   onFrames: (n: number) => void,
 ): Promise<void> {
   const { ffmpeg } = binaries();
@@ -363,6 +403,7 @@ async function decodeAll(
 
   await fsp.rm(tmp, { recursive: true, force: true });
   await fsp.mkdir(tmp, { recursive: true });
+  if (proxy) await fsp.mkdir(path.join(tmp, PROXY_DIR), { recursive: true });
 
   const args = [
     '-y',
@@ -374,6 +415,13 @@ async function decodeAll(
     '-nostats',
     '-progress', 'pipe:1',
     path.join(tmp, `%06d${FRAME_EXTENSION}`),
+    // A second output on the same pass rather than a second run: the source is
+    // decoded once and scaled twice. Measured on a 17 s 1080x2520 clip this
+    // costs about 13% (8.4 s to 9.5 s) against decoding the whole file again.
+    // `-progress` still counts source frames, so the bar is unaffected.
+    ...(proxy
+      ? ['-vf', proxyScaleFilter(), ...frameEncoder(), path.join(tmp, PROXY_DIR, `%06d${FRAME_EXTENSION}`)]
+      : []),
   ];
 
   const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -518,7 +566,8 @@ export async function importMedia({
         await copyAsSingleFrame(sourcePath, dir, ext);
         return finalise(cacheDir, key, sourcePath, info, ext);
       }
-      await decodeAll(key, sourcePath, dir, true, () => {});
+      // A still never gets a proxy (§7), so there is nothing to scale here.
+      await decodeAll(key, sourcePath, dir, true, null, () => {});
     } catch (err) {
       return {
         ok: false,
@@ -528,9 +577,11 @@ export async function importMedia({
     return finalise(cacheDir, key, sourcePath, info, FRAME_EXTENSION);
   }
 
+  const proxy = previewProxySize(info.width, info.height, info.frameCount);
+
   // Phase one: enough to place the object and let the user work with it.
   try {
-    await decodeFirstFrame(sourcePath, firstFramePath(cacheDir, key));
+    await decodeFirstFrame(sourcePath, firstFramePath(cacheDir, key), proxy !== null);
   } catch (err) {
     return {
       ok: false,
@@ -539,7 +590,7 @@ export async function importMedia({
   }
 
   // Phase two, in the background. The renderer already has a usable object.
-  startBackgroundDecode(cacheDir, key, sourcePath, info, onProgress);
+  startBackgroundDecode(cacheDir, key, sourcePath, info, proxy, onProgress);
 
   return {
     ok: true,
@@ -576,6 +627,7 @@ function startBackgroundDecode(
   key: string,
   sourcePath: string,
   info: ProbeInfo,
+  proxy: { width: number; height: number } | null,
   onProgress?: ProgressSink,
 ): void {
   if (running.has(key)) return;
@@ -584,7 +636,7 @@ function startBackgroundDecode(
 
   const task = (async () => {
     try {
-      await decodeAll(key, sourcePath, entryDir(cacheDir, key), false, (frames) => {
+      await decodeAll(key, sourcePath, entryDir(cacheDir, key), false, proxy, (frames) => {
         report({
           cacheKey: key,
           readyFrames: Math.min(frames, info.frameCount),

@@ -1,5 +1,6 @@
 import Konva from 'konva';
 import type { Doc, LayerId, SceneObject, ShapeObject, TextObject, MediaObject } from '../../shared/doc';
+import { previewProxySize } from '../../shared/doc';
 import { peekOrLast } from '../media/bitmapCache';
 import { getPaintCanvas } from '../paint/paintBuffer';
 import { resolveFps, sourceFrameIndex } from './timing';
@@ -33,6 +34,15 @@ export interface BuildOptions {
    * the UI is blocked while it runs, so nothing can be mid-edit.
    */
   hiddenIds?: LayerId[];
+  /**
+   * Draw animated media from the reduced-resolution preview frames (§7).
+   *
+   * The one substitution the preview is allowed to make, and it is a
+   * substitution of *resolution only* — same node, same geometry, same order.
+   * Export must never set this: it reads the native frames, which is what makes
+   * the output pixels the ones §3 promises.
+   */
+  proxies?: boolean;
 }
 
 export function buildScene(
@@ -70,9 +80,10 @@ export function buildScene(
   // 2. Objects, in array order (index 0 is the back).
   const fps = resolveFps(doc);
   const hidden = options.hiddenIds;
+  const proxies = options.proxies ?? false;
   for (const obj of doc.objects) {
     if (hidden && hidden.includes(obj.id)) continue;
-    const node = buildObject(obj, frameIndex, fps);
+    const node = buildObject(obj, frameIndex, fps, proxies);
     if (node) group.add(node);
   }
 
@@ -114,10 +125,11 @@ function buildObject(
   obj: SceneObject,
   frameIndex: number,
   fps: number,
+  proxies: boolean,
 ): Konva.Shape | null {
   switch (obj.kind) {
     case 'media':
-      return buildMedia(obj, frameIndex, fps);
+      return buildMedia(obj, frameIndex, fps, proxies);
     case 'shape':
       return buildShape(obj);
     case 'text':
@@ -125,15 +137,28 @@ function buildObject(
   }
 }
 
-function buildMedia(obj: MediaObject, frameIndex: number, fps: number): Konva.Shape | null {
+/** True when this layer has preview frames and the caller wants them (§7). */
+export function usesProxy(obj: MediaObject, proxies: boolean): boolean {
+  return proxies && previewProxySize(obj.nativeWidth, obj.nativeHeight, obj.frameCount) !== null;
+}
+
+function buildMedia(
+  obj: MediaObject,
+  frameIndex: number,
+  fps: number,
+  proxies: boolean,
+): Konva.Shape | null {
   const sourceIndex = sourceFrameIndex(obj, frameIndex, fps);
   // An undecoded frame falls back to the last one this layer drew, and to
   // nothing at all if it has never drawn. Export prefetches every frame it needs
   // before drawing (§3), so it always gets the exact frame and neither branch is
   // reachable there.
-  const bitmap = peekOrLast(obj.cacheKey, sourceIndex);
+  const bitmap = peekOrLast(obj.cacheKey, sourceIndex, usesProxy(obj, proxies));
   if (!bitmap) return null;
 
+  // The node is sized from the model, not from the bitmap, so a proxy draws at
+  // exactly the same place and size as the native frame would — softer, never
+  // displaced.
   return new Konva.Image({ ...commonProps(obj), image: bitmap });
 }
 
@@ -192,12 +217,20 @@ function buildText(obj: TextObject): Konva.Shape {
  * prefetch before drawing, since `stage.draw()` is synchronous and a missing
  * bitmap would render nothing at all.
  */
-export function framesNeededAt(doc: Doc, frameIndex: number): Array<{ cacheKey: string; index: number }> {
+export function framesNeededAt(
+  doc: Doc,
+  frameIndex: number,
+  proxies = false,
+): Array<{ cacheKey: string; index: number; proxy: boolean }> {
   const fps = resolveFps(doc);
-  const out: Array<{ cacheKey: string; index: number }> = [];
+  const out: Array<{ cacheKey: string; index: number; proxy: boolean }> = [];
   for (const obj of doc.objects) {
     if (obj.kind !== 'media') continue;
-    out.push({ cacheKey: obj.cacheKey, index: sourceFrameIndex(obj, frameIndex, fps) });
+    out.push({
+      cacheKey: obj.cacheKey,
+      index: sourceFrameIndex(obj, frameIndex, fps),
+      proxy: usesProxy(obj, proxies),
+    });
   }
   return out;
 }

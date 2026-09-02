@@ -141,3 +141,20 @@ export function ensureLargeClip() {
   ]);
   return file;
 }
+
+/**
+ * A small animated clip that qualifies for preview proxies (§7): its short side
+ * is over twice the 320 px target, so the decode writes a `proxy/` set beside
+ * the native frames. Square and short, so exporting all of it is cheap.
+ */
+export function ensureProxyClip() {
+  const file = path.join(workDir, 'proxy-clip.avi');
+  if (fs.existsSync(file)) return file;
+  execFileSync(path.join(root, 'resources', 'bin', 'ffmpeg.exe'), [
+    '-y', '-v', 'error',
+    '-f', 'lavfi', '-i', 'testsrc2=size=800x800:rate=10:duration=2',
+    '-c:v', 'mjpeg', '-q:v', '2',
+    file,
+  ]);
+  return file;
+}

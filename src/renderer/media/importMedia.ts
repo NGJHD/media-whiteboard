@@ -1,15 +1,22 @@
 import type { MediaObject } from '../../shared/doc';
 import type { MediaMeta } from '../../shared/ipc';
-import { clampRectToWorld, objectBounds, WORLD_MAX, WORLD_MIN } from '../../shared/doc';
+import {
+  clampRectToWorld,
+  objectBounds,
+  previewProxySize,
+  WORLD_MAX,
+  WORLD_MIN,
+} from '../../shared/doc';
 import { useStore } from '../state/store';
 import { load } from './bitmapCache';
 
 /**
  * Drop handling (CLAUDE.md §7).
  *
- * The object is centred at the cursor at native size. If native size exceeds
- * canvasRect in either dimension it scales down proportionally, and it never
- * scales up. The canvas is never auto-resized to match dropped media.
+ * The object is centred at the cursor and sized to fit within **half** the
+ * canvas, never scaled up. Fitting the whole canvas meant every photo-sized drop
+ * covered everything already on it, which is the opposite of what a drop onto a
+ * composition wants. The canvas is never auto-resized to match dropped media.
  */
 
 function newId(): string {
@@ -42,13 +49,20 @@ export async function importMetaAsObject(
   at: DropPoint,
   offset = 0,
 ): Promise<MediaObject | null> {
-  if (!(await load(meta.cacheKey, 0))) return null;
+  // The variant the preview will actually ask for (§7), so this proves the
+  // thing that is about to be drawn, not a sibling of it.
+  const proxy = previewProxySize(meta.nativeWidth, meta.nativeHeight, meta.frameCount) !== null;
+  if (!(await load(meta.cacheKey, 0, proxy))) return null;
 
   const store = useStore.getState();
   const { canvasRect } = store.doc;
 
-  // Scale down to fit the canvas, never up (§7).
-  const fit = Math.min(canvasRect.width / meta.nativeWidth, canvasRect.height / meta.nativeHeight, 1);
+  // §7: scale down to fit half the canvas, never up.
+  const fit = Math.min(
+    canvasRect.width / 2 / meta.nativeWidth,
+    canvasRect.height / 2 / meta.nativeHeight,
+    1,
+  );
 
   const object: MediaObject = {
     id: newId(),

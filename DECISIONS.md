@@ -577,3 +577,63 @@ with anything selected, right-clicking bare canvas produced the *object* menu �
 Delete and the z-order moves, aimed at something nowhere near the pointer. Left
 click deselects on empty space via the mousedown handler, but a right-click
 returns from that handler early, so the contextmenu handler has to do it itself.
+
+---
+
+## D-030 — The preview draws animated layers from 320 px proxies
+
+**Decision**: the decode writes each animated frame twice — native into the entry
+directory, and again scaled to a **320 px short side** into `<entry>/proxy/`.
+The preview draws the proxies; export reads the native frames and never sees a
+proxy. Stills and sources whose short side is under 640 px get none.
+
+**Why**: the preview of a large clip could not keep up. A 17 s 1080x2520 clip is
+~11 GB of decoded bitmaps against a 512 MB budget, so only ~49 of its 1020
+frames were resident — and because the loop walks them in order, LRU gave close
+to a 0% hit rate. Each miss then cost ~15 ms to decode a full-size PNG, nowhere
+near enough for 60 fps.
+
+Measured on that clip, cold cache, before and after:
+
+| | before | after |
+|---|---|---|
+| preview cache hit rate | ~0% | **100%** |
+| resident frames | 49 of 1020 | 332, 317 MB |
+| time to appear on canvas | 0.72 s | 0.43 s |
+| full decode | 10.7 s | 11.0 s |
+
+A proxy frame is ~54 KB on disk and ~1 ms to decode, so a miss stops mattering
+even when one happens.
+
+**One pass, two outputs.** ffmpeg decodes the source once and scales it twice,
+which costs about 13% (8.4 s to 9.5 s on that clip) against roughly doubling it
+by running a second command. `-progress` still counts source frames, so the bar
+is unaffected.
+
+**The scale targets the short side**, whichever it is: a portrait clip's short
+side is its width and a landscape clip's is its height, so a fixed `-1:320`
+would shrink one of them far past the target.
+
+**Where the line is.** This is the only thing the preview is allowed to
+substitute, and it substitutes *resolution only* — same node, same geometry,
+same order, so §3's single construction path is intact. `previewProxySize` is in
+`shared/doc.ts` and both processes derive from it, so neither has to be told
+whether an entry has proxies; and the variant travels in the URL host rather
+than in `MediaObject`, so it never reaches a saved project.
+
+**Not for stills.** A still decodes once and is then drawn every frame for free.
+There is no churn to spare, and softening it would be a pure loss. Nor for
+sources whose short side is under twice the target: below that the second output
+and the extra disk cost more than they save.
+
+---
+
+## D-031 — A drop is sized to half the canvas
+
+**Decision**: `importMetaAsObject` fits the object inside half of `canvasRect` in
+both dimensions rather than the whole of it. Still never scales up.
+
+**Why**: photo-sized sources are far larger than any sensible canvas, so the old
+rule scaled every one of them to fill the canvas exactly — each drop covered
+everything already on it. Half leaves the composition visible and is still large
+enough to work with; anything genuinely small keeps its native size.

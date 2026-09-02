@@ -213,7 +213,68 @@ console.log('\n=== the suggested output name is free (§12) ===');
   }
 }
 
-/* -- 4. The canvas keeps painting under cache pressure (§7, §11) ------------ */
+/* -- 4. Eviction never hands out a closed bitmap (§7) ---------------------- */
+
+console.log('');
+console.log('=== eviction keeps the fallback frame alive (§7) ===');
+{
+  const clip = ensureLargeClip();
+  const result = await harness.run(
+    `
+    (async () => {
+      const store = window.__mwStore;
+      const { importFiles } = await import('/media/importMedia.ts');
+      const cache = await import('/media/bitmapCache.ts');
+
+      await importFiles([${JSON.stringify(clip)}], { x: 0, y: 0 });
+      await window.__mwIdle();
+      const key = store.getState().doc.objects[0].cacheKey;
+
+      // Native frames, not proxies: at 2560x1440 one is ~14.7 MB, so a few
+      // dozen fill the 512 MB budget and eviction has to start.
+      const first = await cache.load(key, 0, false);
+      cache.peek(key, 0, false);           // frame 0 is now this layer's fallback
+      const perFrame = first.width * first.height * 4;
+
+      for (let i = 1; i < 60; i += 1) await cache.load(key, i, false);
+      const after = cache.stats();
+
+      // An index far past anything loaded, so peekOrLast has to fall back.
+      const fallback = cache.peekOrLast(key, 999999, false);
+
+      return {
+        ok: true,
+        // 60 native frames is well past the budget, so the oldest unprotected
+        // one must be gone. Frame 1, not 0 — 0 is the protected fallback.
+        pushedMb: Math.round((perFrame * 60) / 1e6),
+        budgetMb: Math.round(after.budget / 1e6),
+        earlyFrameEvicted: cache.peek(key, 1, false) === null,
+        withinBudget: after.bytes <= after.budget,
+        fallbackAlive: fallback ? fallback.width > 0 : null,
+      };
+    })()
+  `,
+    { timeoutMs: 180_000 },
+  );
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.truthy(
+      'the budget forced eviction',
+      result.earlyFrameEvicted,
+      `pushed ${result.pushedMb} MB through a ${result.budgetMb} MB budget`,
+    );
+    c.truthy('and the budget held', result.withinBudget);
+    // A closed ImageBitmap reports 0x0, and drawing one throws from inside
+    // Konva's layer draw — which latches `_waitingForDraw` and kills the canvas
+    // for good. Eviction must skip the frame a layer is standing on.
+    c.check('the fallback frame is still usable', result.fallbackAlive, true);
+  }
+}
+
+/* -- 5. The canvas keeps painting under cache pressure (§7, §11) ------------ */
 
 console.log('');
 console.log('=== the preview survives cache eviction (§7, §11) ===');

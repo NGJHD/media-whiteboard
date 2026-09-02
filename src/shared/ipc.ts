@@ -37,7 +37,7 @@ export interface FfmpegInfo {
  * written by an older build are re-decoded instead of silently serving stale
  * metadata. The cache key covers the *source file*, not the decoder.
  */
-export const MEDIA_META_VERSION = 4;
+export const MEDIA_META_VERSION = 5;
 
 /** Written as meta.json beside the decoded frames. */
 export interface MediaMeta {
@@ -125,8 +125,13 @@ export interface CacheInfo {
  */
 export const FRAME_SCHEME = 'mwframe';
 
-export function frameUrl(cacheKey: string, index: number): string {
-  return `${FRAME_SCHEME}://frame/${cacheKey}/${index}`;
+/**
+ * `proxy` asks for the reduced-resolution preview frame (§7) rather than the
+ * native one. The host segment carries it so the size never has to travel in
+ * the URL, in `MediaObject`, or into a saved project.
+ */
+export function frameUrl(cacheKey: string, index: number, proxy = false): string {
+  return `${FRAME_SCHEME}://${proxy ? 'proxy' : 'frame'}/${cacheKey}/${index}`;
 }
 
 export type OutputFormat = 'webp' | 'gif';

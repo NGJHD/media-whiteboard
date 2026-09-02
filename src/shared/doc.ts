@@ -119,6 +119,51 @@ export const WORLD_MAX = PAINT_BUFFER_SIZE / 2;
 /** §7: sources longer than this are rejected on drop. */
 export const MAX_SOURCE_SECONDS = 30;
 
+/**
+ * §7: the short side of a preview proxy frame, in pixels.
+ *
+ * The preview of an animated layer cannot afford its native frames. A 17 s
+ * 1080x2520 clip is ~11 GB of decoded bitmaps against a 512 MB budget, so almost
+ * every frame is a cache miss, and a full-size PNG costs ~15 ms to decode — far
+ * too slow to sustain 60 fps. At this size the same frame is ~54 KB on disk,
+ * ~1 ms to decode and ~1 MB resident.
+ *
+ * Export never sees these. It reads the native frames, so output pixels are
+ * unchanged; this is the one thing the preview is allowed to substitute (§3).
+ */
+export const PREVIEW_PROXY_SHORT_SIDE = 320;
+
+/**
+ * The proxy size for a source, or null when it should be previewed at native
+ * resolution.
+ *
+ * Only **animated** sources get a proxy. A still decodes once and then sits in
+ * the cache being drawn every frame for free — there is no churn to spare, and
+ * softening it would be a pure loss. Sources already at or below the target are
+ * left alone for the same reason.
+ *
+ * Main and the renderer both derive this from the same numbers, so neither has
+ * to be told whether a proxy exists.
+ */
+export function previewProxySize(
+  nativeWidth: number,
+  nativeHeight: number,
+  frameCount: number,
+): { width: number; height: number } | null {
+  if (frameCount <= 1) return null;
+
+  // Only worth it when the proxy is at most a quarter of the area. Below that
+  // the second decode output and the extra disk cost more than the saving.
+  const shortSide = Math.min(nativeWidth, nativeHeight);
+  if (shortSide <= PREVIEW_PROXY_SHORT_SIDE * 2) return null;
+
+  const scale = PREVIEW_PROXY_SHORT_SIDE / shortSide;
+  return {
+    width: Math.max(1, Math.round(nativeWidth * scale)),
+    height: Math.max(1, Math.round(nativeHeight * scale)),
+  };
+}
+
 /** §9 defaults, centred on the world origin so the world clamp is symmetric. */
 export function createEmptyDoc(outputPath: string): Doc {
   return {

@@ -12,7 +12,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeChecker, startHarness, workDir } from './smoke-lib.mjs';
+import { ensureProxyClip, makeChecker, startHarness, workDir } from './smoke-lib.mjs';
 import { root } from './esbuild.config.mjs';
 
 const ffmpeg = path.join(root, 'resources', 'bin', 'ffmpeg.exe');
@@ -293,6 +293,85 @@ console.log('=== static output (§12) ===');
     const stream = JSON.parse(probe).streams[0];
     c.check('single frame on disk', Number(stream.nb_read_frames), 1);
     c.check('canvas size honoured', [Number(stream.width), Number(stream.height)], [320, 180]);
+  }
+}
+
+/* -- Export reads native frames, never preview proxies (§3, §7) ------------- */
+
+console.log('');
+console.log('=== export ignores the preview proxies (§3, §7) ===');
+{
+  const clip = ensureProxyClip();
+  const out = path.join(workDir, 'scene-native.webp');
+  fs.rmSync(out, { force: true });
+
+  const info = await harness.run(`
+    (async () => {
+      const { importFiles } = await import('/media/importMedia.ts');
+      const { exportDocument } = await import('/export/exportScene.ts');
+      const { buildScene, framesNeededAt } = await import('/scene/buildScene.ts');
+      const cache = await import('/media/bitmapCache.ts');
+      const store = window.__mwStore;
+
+      await importFiles([${JSON.stringify(clip)}], { x: 0, y: 0 });
+      await window.__mwIdle();
+      const key = store.getState().doc.objects[0].cacheKey;
+
+      store.getState().apply('setup', (d) => {
+        d.canvasRect = { x: -160, y: -160, width: 320, height: 320 };
+        d.background = { transparent: false, color: '#000000' };
+        d.outputPath = ${JSON.stringify(out)};
+        d.format = 'webp';
+        d.objects[0].x = 0;
+        d.objects[0].y = 0;
+        d.objects[0].width = 800;
+        d.objects[0].height = 800;
+      });
+
+      // A real export of a layer that has proxies, so the whole path runs.
+      const result = await exportDocument({ doc: store.getState().doc });
+
+      // Then the precise claim: which bitmap each caller actually gets. A
+      // pixel comparison cannot answer this — the output is lossy WebP, which
+      // blurs enough to muddy exactly the difference being looked for.
+      const doc = store.getState().doc;
+      await cache.load(key, 0, false);
+      await cache.load(key, 0, true);
+
+      const imageIn = (group) =>
+        group.getChildren().find((n) => n.className === 'Image' && n.image());
+      const exportImage = imageIn(buildScene(doc, 0, { clipToCanvas: true }));
+      const previewImage = imageIn(buildScene(doc, 0, { clipToCanvas: false, proxies: true }));
+
+      return {
+        ok: true,
+        bytes: result.bytes,
+        native: store.getState().doc.objects[0].nativeWidth,
+        exportBitmapWidth: exportImage ? exportImage.image().width : null,
+        previewBitmapWidth: previewImage ? previewImage.image().width : null,
+        exportAsks: framesNeededAt(doc, 0).map((f) => f.proxy),
+        previewAsks: framesNeededAt(doc, 0, true).map((f) => f.proxy),
+        cacheDir: (await window.api.getCacheInfo()).dir,
+        cacheKey: key,
+      };
+    })()
+  `);
+
+  if (!info.ok) {
+    c.fail(`export failed: ${info.error}`);
+    for (const line of info.log ?? []) console.error(`    ${line}`);
+  } else {
+    const proxyFrame = path.join(info.cacheDir, info.cacheKey, 'proxy', '000001.png');
+    c.truthy('the decode wrote preview proxies', fs.existsSync(proxyFrame));
+    c.truthy('the export produced a file', info.bytes > 0, `${info.bytes} bytes`);
+
+    // §3: the preview may substitute resolution and nothing else. If export
+    // ever picked up a proxy the output would silently lose detail, and no
+    // geometry assertion would notice.
+    c.check('export draws the native frame', info.exportBitmapWidth, info.native);
+    c.check('the preview draws a 320 px-short-side proxy', info.previewBitmapWidth, 320);
+    c.check('export asks for native frames', info.exportAsks, [false]);
+    c.check('the preview asks for proxies', info.previewAsks, [true]);
   }
 }
 
