@@ -1,11 +1,16 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { binaries } from './ffmpeg';
 import { MAX_SOURCE_SECONDS } from '../shared/doc';
-import { MEDIA_META_VERSION, type ImportResult, type MediaMeta } from '../shared/ipc';
+import {
+  MEDIA_META_VERSION,
+  type ImportResult,
+  type MediaMeta,
+  type MediaProgress,
+} from '../shared/ipc';
 
 const execFileAsync = promisify(execFile);
 
@@ -15,6 +20,20 @@ const execFileAsync = promisify(execFile);
  * Sources are decoded at their native frame rate, never at outputFps, so
  * changing the fps dropdown never invalidates the cache — resampling happens at
  * render time (§8).
+ *
+ * Import is two-phase. Phase one probes and produces a single frame, and that is
+ * all `importMedia` waits for: a drop must be manipulable straight away, not
+ * after a 30 s video has been transcoded. Phase two decodes the rest in the
+ * background and reports progress, so the UI can show a non-blocking bar per
+ * pending item.
+ *
+ * **Cached frames are PNG, and a static source is not re-encoded at all.**
+ * Measured on this machine, at 1080x2520: lossless WebP costs 38 s per 40
+ * frames, PNG 0.9 s — a 17 s clip took roughly sixteen minutes to import and now
+ * takes eight seconds. A single 3456x5184 JPEG took eleven seconds to re-encode
+ * as lossless WebP and one second as PNG; copying it costs neither. Both formats
+ * are lossless, so nothing about output fidelity changes — only the size of the
+ * cache, which already has an LRU cap.
  */
 
 /** §7 accepted inputs. Anything else is rejected with a toast. */
@@ -24,6 +43,27 @@ export const ACCEPTED_EXTENSIONS = [
 ];
 
 const STATIC_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.bmp']);
+
+/**
+ * Formats Chromium decodes natively, so a single-frame source of one of these
+ * can be **copied** into the cache rather than transcoded. `createImageBitmap`
+ * in the renderer does the decoding either way; running the pixels through
+ * ffmpeg first only buys a different container, at the cost of the slowest step
+ * in the whole import.
+ */
+const DIRECTLY_RENDERABLE = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.webp', '.gif']);
+
+/** What a decoded animated frame is written as. See the note at the top. */
+const FRAME_EXTENSION = '.png';
+
+/**
+ * Formats whose frames carry individually meaningful delays, so the timings have
+ * to be read from the frames themselves. Everything else is a video container:
+ * ffprobe's `avg_frame_rate` describes it accurately, and asking for
+ * `-show_frames` there means decoding the whole file just to learn its duration
+ * — the single biggest cost in a drop.
+ */
+const PER_FRAME_TIMING_EXTENSIONS = new Set(['.gif', '.webp']);
 
 /** §7: sha256(sourcePath + mtimeMs + fileSize), truncated to 16 hex chars. */
 async function cacheKeyFor(sourcePath: string): Promise<string> {
@@ -39,8 +79,10 @@ interface ProbeStream {
   height?: number;
   duration?: string;
   avg_frame_rate?: string;
+  r_frame_rate?: string;
   codec_name?: string;
   nb_frames?: string;
+  tags?: Record<string, string>;
 }
 
 interface ProbeFrame {
@@ -52,6 +94,12 @@ interface ProbeFrame {
  * §8.0: any frameDurationMs below 20 is treated as 100 ms, matching browser
  * behaviour for malformed GIFs. Without this a single junk frame reports several
  * hundred fps and drags Auto up with it.
+ *
+ * The rule applies **only to GIF and animated WebP**, which is where the
+ * malformed-delay convention comes from. Applying it to video was a bug: a
+ * 59.94 fps clip has a perfectly legitimate 16.68 ms per frame, and rewriting
+ * every one of those to 100 ms made a 17 s file measure 102 s and be rejected by
+ * the §7 duration limit.
  *
  * Durations are also rounded to 0.001 ms. They come from differencing decimal
  * second timestamps, which leaves float noise: a uniform 10 fps GIF yields
@@ -95,6 +143,24 @@ function durationsFromFrames(frames: ProbeFrame[], totalSeconds: number): number
   return out;
 }
 
+/** "23.976", "30000/1001" and "0/0" all appear here. Only the last is useless. */
+function parseRational(value: string | undefined): number {
+  if (!value) return 0;
+  const [num, den] = value.split('/');
+  const n = Number(num);
+  const d = den === undefined ? 1 : Number(den);
+  if (!Number.isFinite(n) || !Number.isFinite(d) || d === 0) return 0;
+  return n / d;
+}
+
+/** Matroska writes its duration as a `DURATION` tag: "00:00:17.014000000". */
+function parseTimecode(value: string | undefined): number {
+  if (!value) return 0;
+  const parts = value.split(':').map(Number);
+  if (parts.length !== 3 || parts.some((p) => !Number.isFinite(p))) return 0;
+  return parts[0]! * 3600 + parts[1]! * 60 + parts[2]!;
+}
+
 export interface ProbeInfo {
   width: number;
   height: number;
@@ -108,12 +174,16 @@ export async function probe(sourcePath: string): Promise<ProbeInfo> {
   const { ffprobe } = binaries();
   const ext = path.extname(sourcePath).toLowerCase();
   const isStatic = STATIC_EXTENSIONS.has(ext);
+  const perFrameTiming = PER_FRAME_TIMING_EXTENSIONS.has(ext);
 
   const args = [
     '-v', 'error',
     '-select_streams', 'v:0',
     '-show_streams',
-    ...(isStatic ? [] : ['-show_frames', '-show_entries', 'frame=best_effort_timestamp_time,duration_time']),
+    '-show_format',
+    ...(isStatic || !perFrameTiming
+      ? []
+      : ['-show_frames', '-show_entries', 'frame=best_effort_timestamp_time,duration_time']),
     '-of', 'json',
     sourcePath,
   ];
@@ -121,14 +191,25 @@ export async function probe(sourcePath: string): Promise<ProbeInfo> {
   // A 30 s 60 fps source yields 1800 frame entries; the default 1 MB buffer is
   // not enough for that JSON.
   const { stdout } = await execFileAsync(ffprobe, args, { maxBuffer: 64 * 1024 * 1024 });
-  const parsed = JSON.parse(stdout) as { streams?: ProbeStream[]; frames?: ProbeFrame[] };
+  const parsed = JSON.parse(stdout) as {
+    streams?: ProbeStream[];
+    frames?: ProbeFrame[];
+    format?: { duration?: string };
+  };
 
   const stream = parsed.streams?.[0];
   if (!stream || !stream.width || !stream.height) {
     throw new Error('No video stream found — the file may be corrupt or unsupported.');
   }
 
-  const durationSeconds = Number(stream.duration) || 0;
+  // Matroska carries no per-stream duration, so a stream-only read returns 0 and
+  // every duration check downstream is wrong. Try every place it can live.
+  const durationSeconds =
+    [
+      Number(stream.duration),
+      Number(parsed.format?.duration),
+      parseTimecode(stream.tags?.DURATION ?? stream.tags?.duration),
+    ].find((v) => Number.isFinite(v) && v > 0) ?? 0;
 
   if (isStatic) {
     return {
@@ -141,28 +222,64 @@ export async function probe(sourcePath: string): Promise<ProbeInfo> {
     };
   }
 
-  const frames = parsed.frames ?? [];
-  const durations = normaliseDurations(durationsFromFrames(frames, durationSeconds));
+  if (perFrameTiming) {
+    const frames = parsed.frames ?? [];
+    const durations = normaliseDurations(durationsFromFrames(frames, durationSeconds));
 
-  if (durations.length === 0) {
-    throw new Error('Could not read any frames — the file may be corrupt.');
+    if (durations.length === 0) {
+      throw new Error('Could not read any frames — the file may be corrupt.');
+    }
+
+    const totalMs = durations.reduce((a, b) => a + b, 0);
+    return {
+      width: stream.width,
+      height: stream.height,
+      durationSeconds: durationSeconds || totalMs / 1000,
+      frameDurationsMs: durations,
+      frameCount: durations.length,
+      codec: stream.codec_name ?? ext.slice(1),
+    };
   }
 
-  // A single-frame "animation" (a static WebP, a one-frame GIF) is static.
-  const totalMs = durations.reduce((a, b) => a + b, 0);
+  // Video container: uniform timing at the declared rate. §8.1 samples by
+  // nearest frame at whole output frames, so per-packet jitter in a VFR source
+  // cannot change which frame is picked.
+  const fps = parseRational(stream.avg_frame_rate) || parseRational(stream.r_frame_rate);
+  if (fps <= 0) {
+    throw new Error('Could not read the frame rate — the file may be corrupt.');
+  }
+
+  const declaredFrames = Number(stream.nb_frames);
+  const frameCount = Math.max(
+    1,
+    Number.isFinite(declaredFrames) && declaredFrames > 0
+      ? Math.round(declaredFrames)
+      : Math.round(durationSeconds * fps),
+  );
+
+  const perFrameMs = Math.round((1000 / fps) * 1000) / 1000;
 
   return {
     width: stream.width,
     height: stream.height,
-    durationSeconds: durationSeconds || totalMs / 1000,
-    frameDurationsMs: durations,
-    frameCount: durations.length,
+    durationSeconds: durationSeconds || (frameCount * perFrameMs) / 1000,
+    frameDurationsMs: new Array<number>(frameCount).fill(perFrameMs),
+    frameCount,
     codec: stream.codec_name ?? ext.slice(1),
   };
 }
 
 function entryDir(cacheDir: string, key: string): string {
   return path.join(cacheDir, key);
+}
+
+/**
+ * Where phase one writes its single frame. It sits beside the entry directory
+ * rather than inside it, so the atomic publish of the full decode is unaffected
+ * and `readMeta` can never mistake it for a complete entry.
+ */
+export function firstFramePath(cacheDir: string, key: string): string {
+  return path.join(cacheDir, `${key}.first${FRAME_EXTENSION}`);
 }
 
 async function readMeta(cacheDir: string, key: string): Promise<MediaMeta | null> {
@@ -174,22 +291,76 @@ async function readMeta(cacheDir: string, key: string): Promise<MediaMeta | null
     if (meta.metaVersion !== MEDIA_META_VERSION) return null;
     // Trust the entry only if the frames it claims are actually there.
     const files = await fsp.readdir(entryDir(cacheDir, key));
-    const frames = files.filter((f) => f.endsWith('.webp')).length;
-    return frames === meta.frameCount ? meta : null;
+    const frames = files.filter((f) => f.endsWith(meta.frameExt)).length;
+    if (frames !== meta.frameCount) return null;
+    return { ...meta, complete: true, readyFrames: meta.frameCount };
   } catch {
     return null;
   }
 }
 
+function decodeErrorMessage(stderr: string): string {
+  const tail = stderr.trim().split(/\r?\n/).slice(-6).join('\n');
+  return `Could not decode this file.${tail ? `\n${tail}` : ''}`;
+}
+
 /**
- * Decodes to a lossless WebP frame sequence in the cache (§7).
- *
- * Note the flag order: `-lossless 1` is a libwebp encoder option and must precede
- * the output file. §7 writes it after, which ffmpeg rejects.
+ * PNG at zlib level 1. Level 1 is both the fastest of the useful settings and,
+ * measured here, the smallest — level 0 stores raw and quadruples the entry for
+ * no speed gain. Still lossless, which is all §7 actually requires of the cache.
  */
-async function decode(sourcePath: string, dir: string, isStatic: boolean): Promise<void> {
+function frameEncoder(): string[] {
+  return ['-c:v', 'png', '-compression_level', '1'];
+}
+
+/**
+ * Phase one: one frame, as fast as ffmpeg can produce it. This is what the drop
+ * waits on, so it must never scan the whole file.
+ */
+async function decodeFirstFrame(sourcePath: string, outFile: string): Promise<void> {
+  const { ffmpeg } = binaries();
+  await fsp.mkdir(path.dirname(outFile), { recursive: true });
+  try {
+    await execFileAsync(
+      ffmpeg,
+      ['-y', '-i', sourcePath, '-an', '-frames:v', '1', ...frameEncoder(), outFile],
+      { maxBuffer: 16 * 1024 * 1024 },
+    );
+  } catch (err) {
+    throw new Error(decodeErrorMessage((err as { stderr?: string }).stderr ?? ''));
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Background decode (§7)                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** Decodes still running, so a second drop of the same file joins rather than races. */
+const running = new Map<string, Promise<void>>();
+/** Keyed so a single entry can be cancelled without touching the others. */
+const processes = new Map<string, ChildProcess>();
+/** Keys whose decode was abandoned on purpose, so it is not reported as failed. */
+const cancelled = new Set<string>();
+
+export type ProgressSink = (progress: MediaProgress) => void;
+
+/**
+ * Decodes to a lossless frame sequence in the cache (§7).
+ *
+ * `-progress pipe:1` is what makes the non-blocking progress bar possible:
+ * ffmpeg reports `frame=N` as it goes, which is exactly the number of frames
+ * already written.
+ */
+async function decodeAll(
+  key: string,
+  sourcePath: string,
+  dir: string,
+  isStatic: boolean,
+  onFrames: (n: number) => void,
+): Promise<void> {
   const { ffmpeg } = binaries();
   const tmp = `${dir}.partial`;
+
   await fsp.rm(tmp, { recursive: true, force: true });
   await fsp.mkdir(tmp, { recursive: true });
 
@@ -199,18 +370,49 @@ async function decode(sourcePath: string, dir: string, isStatic: boolean): Promi
     // §17: strip audio from every source.
     '-an',
     ...(isStatic ? ['-frames:v', '1'] : ['-fps_mode', 'passthrough']),
-    '-c:v', 'libwebp',
-    '-lossless', '1',
-    path.join(tmp, '%06d.webp'),
+    ...frameEncoder(),
+    '-nostats',
+    '-progress', 'pipe:1',
+    path.join(tmp, `%06d${FRAME_EXTENSION}`),
   ];
 
+  const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  processes.set(key, proc);
+
+  let stderr = '';
+  proc.stderr.on('data', (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString('utf8')).slice(-4000);
+  });
+
+  let pending = '';
+  proc.stdout.on('data', (chunk: Buffer) => {
+    pending += chunk.toString('utf8');
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? '';
+    for (const line of lines) {
+      const match = /^frame=\s*(\d+)/.exec(line);
+      if (match) onFrames(Number(match[1]));
+    }
+  });
+
+  let code: number | null;
   try {
-    await execFileAsync(ffmpeg, args, { maxBuffer: 16 * 1024 * 1024 });
-  } catch (err) {
+    code = await new Promise<number | null>((resolve, reject) => {
+      proc.once('error', reject);
+      proc.once('close', resolve);
+    });
+  } finally {
+    if (processes.get(key) === proc) processes.delete(key);
+  }
+
+  if (cancelled.has(key)) {
+    await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    throw new CancelledError();
+  }
+
+  if (code !== 0) {
     await fsp.rm(tmp, { recursive: true, force: true });
-    const stderr = (err as { stderr?: string }).stderr ?? '';
-    const tail = stderr.trim().split(/\r?\n/).slice(-6).join('\n');
-    throw new Error(`Could not decode this file.${tail ? `\n${tail}` : ''}`);
+    throw new Error(decodeErrorMessage(stderr));
   }
 
   // Publish atomically: a half-written entry must never look complete to a
@@ -219,12 +421,53 @@ async function decode(sourcePath: string, dir: string, isStatic: boolean): Promi
   await fsp.rename(tmp, dir);
 }
 
+/** Thrown when a decode was abandoned deliberately; never surfaced as an error. */
+class CancelledError extends Error {
+  constructor() {
+    super('decode cancelled');
+  }
+}
+
+/** Kills any decode still running, so quitting leaves no orphan ffmpeg. */
+export function stopDecodes(): void {
+  for (const [key, proc] of processes) {
+    cancelled.add(key);
+    proc.kill();
+  }
+  processes.clear();
+}
+
+/**
+ * Abandons one entry's background decode (§7).
+ *
+ * Deleting the layer that a decode is feeding makes the rest of that decode
+ * pointless: it is minutes of CPU and up to a gigabyte of disk spent on frames
+ * nothing will ask for. The partial output goes with it, so the next drop of the
+ * same file starts clean rather than resuming into a half-written directory.
+ */
+export async function cancelDecode(cacheDir: string, key: string): Promise<void> {
+  if (!running.has(key) && !processes.has(key)) return;
+  cancelled.add(key);
+  processes.get(key)?.kill();
+  processes.delete(key);
+
+  await running.get(key)?.catch(() => {});
+  await fsp.rm(`${entryDir(cacheDir, key)}.partial`, { recursive: true, force: true }).catch(() => {});
+  await fsp.rm(firstFramePath(cacheDir, key), { force: true }).catch(() => {});
+  cancelled.delete(key);
+}
+
 export interface ImportOptions {
   cacheDir: string;
   sourcePath: string;
+  onProgress?: ProgressSink;
 }
 
-export async function importMedia({ cacheDir, sourcePath }: ImportOptions): Promise<ImportResult> {
+export async function importMedia({
+  cacheDir,
+  sourcePath,
+  onProgress,
+}: ImportOptions): Promise<ImportResult> {
   const ext = path.extname(sourcePath).toLowerCase();
   if (!ACCEPTED_EXTENSIONS.includes(ext)) {
     return { ok: false, error: `${path.basename(sourcePath)}: unsupported file type.` };
@@ -265,9 +508,29 @@ export async function importMedia({ cacheDir, sourcePath }: ImportOptions): Prom
     return { ok: true, meta: existing };
   }
 
-  const isStatic = info.frameCount === 1;
+  // A static source is one frame either way, so there is nothing to defer — and
+  // if the renderer can decode the file as it stands, there is nothing to encode
+  // either. This is the difference between a large JPEG appearing instantly and
+  // appearing eleven seconds later.
+  if (info.frameCount === 1) {
+    try {
+      if (DIRECTLY_RENDERABLE.has(ext)) {
+        await copyAsSingleFrame(sourcePath, dir, ext);
+        return finalise(cacheDir, key, sourcePath, info, ext);
+      }
+      await decodeAll(key, sourcePath, dir, true, () => {});
+    } catch (err) {
+      return {
+        ok: false,
+        error: `${path.basename(sourcePath)}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    return finalise(cacheDir, key, sourcePath, info, FRAME_EXTENSION);
+  }
+
+  // Phase one: enough to place the object and let the user work with it.
   try {
-    await decode(sourcePath, dir, isStatic);
+    await decodeFirstFrame(sourcePath, firstFramePath(cacheDir, key));
   } catch (err) {
     return {
       ok: false,
@@ -275,8 +538,117 @@ export async function importMedia({ cacheDir, sourcePath }: ImportOptions): Prom
     };
   }
 
+  // Phase two, in the background. The renderer already has a usable object.
+  startBackgroundDecode(cacheDir, key, sourcePath, info, onProgress);
+
+  return {
+    ok: true,
+    meta: {
+      metaVersion: MEDIA_META_VERSION,
+      cacheKey: key,
+      sourcePath,
+      frameCount: info.frameCount,
+      frameDurationsMs: info.frameDurationsMs,
+      nativeWidth: info.width,
+      nativeHeight: info.height,
+      frameExt: FRAME_EXTENSION,
+      complete: false,
+      readyFrames: 1,
+    },
+  };
+}
+
+/**
+ * Publishes a single-frame entry by copying the source in, under the same
+ * atomic rename the decoder uses so a half-copied entry can never look complete.
+ */
+async function copyAsSingleFrame(sourcePath: string, dir: string, ext: string): Promise<void> {
+  const tmp = `${dir}.partial`;
+  await fsp.rm(tmp, { recursive: true, force: true });
+  await fsp.mkdir(tmp, { recursive: true });
+  await fsp.copyFile(sourcePath, path.join(tmp, `000001${ext}`));
+  await fsp.rm(dir, { recursive: true, force: true });
+  await fsp.rename(tmp, dir);
+}
+
+function startBackgroundDecode(
+  cacheDir: string,
+  key: string,
+  sourcePath: string,
+  info: ProbeInfo,
+  onProgress?: ProgressSink,
+): void {
+  if (running.has(key)) return;
+
+  const report = (progress: MediaProgress) => onProgress?.(progress);
+
+  const task = (async () => {
+    try {
+      await decodeAll(key, sourcePath, entryDir(cacheDir, key), false, (frames) => {
+        report({
+          cacheKey: key,
+          readyFrames: Math.min(frames, info.frameCount),
+          totalFrames: info.frameCount,
+          done: false,
+          meta: null,
+          error: null,
+        });
+      });
+
+      const result = await finalise(cacheDir, key, sourcePath, info, FRAME_EXTENSION);
+      await fsp.rm(firstFramePath(cacheDir, key), { force: true }).catch(() => {});
+
+      report(
+        result.ok
+          ? {
+              cacheKey: key,
+              readyFrames: result.meta.frameCount,
+              totalFrames: result.meta.frameCount,
+              done: true,
+              meta: result.meta,
+              error: null,
+            }
+          : {
+              cacheKey: key,
+              readyFrames: 1,
+              totalFrames: info.frameCount,
+              done: true,
+              meta: null,
+              error: result.error,
+            },
+      );
+    } catch (err) {
+      // A cancelled decode is a thing the user asked for, not a failure to
+      // report. The renderer has already dropped the job that named it.
+      if (err instanceof CancelledError) return;
+      report({
+        cacheKey: key,
+        readyFrames: 1,
+        totalFrames: info.frameCount,
+        done: true,
+        meta: null,
+        error: `${path.basename(sourcePath)}: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      running.delete(key);
+    }
+  })();
+
+  running.set(key, task);
+}
+
+/** Writes meta.json once the frames are on disk, and returns the final meta. */
+async function finalise(
+  cacheDir: string,
+  key: string,
+  sourcePath: string,
+  info: ProbeInfo,
+  frameExt: string,
+): Promise<ImportResult> {
+  const dir = entryDir(cacheDir, key);
+
   // ffmpeg decides how many frames actually came out; trust that over the probe.
-  const files = (await fsp.readdir(dir)).filter((f) => f.endsWith('.webp')).sort();
+  const files = (await fsp.readdir(dir)).filter((f) => f.endsWith(frameExt)).sort();
   if (files.length === 0) {
     await fsp.rm(dir, { recursive: true, force: true });
     return { ok: false, error: `${path.basename(sourcePath)}: produced no frames.` };
@@ -295,6 +667,9 @@ export async function importMedia({ cacheDir, sourcePath }: ImportOptions): Prom
     frameDurationsMs: files.length === 1 ? [0] : durations,
     nativeWidth: info.width,
     nativeHeight: info.height,
+    frameExt,
+    complete: true,
+    readyFrames: files.length,
   };
 
   await fsp.writeFile(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
@@ -302,8 +677,8 @@ export async function importMedia({ cacheDir, sourcePath }: ImportOptions): Prom
 }
 
 /** Frame files are served to the renderer by index. */
-export function framePath(cacheDir: string, key: string, index: number): string {
-  return path.join(entryDir(cacheDir, key), `${String(index + 1).padStart(6, '0')}.webp`);
+export function framePath(cacheDir: string, key: string, index: number, ext: string): string {
+  return path.join(entryDir(cacheDir, key), `${String(index + 1).padStart(6, '0')}${ext}`);
 }
 
 async function touch(dir: string): Promise<void> {
@@ -359,6 +734,25 @@ export async function cacheSize(cacheDir: string): Promise<number> {
   return (await listCache(cacheDir)).reduce((sum, e) => sum + e.bytes, 0);
 }
 
+/**
+ * Clears the leftovers of an interrupted decode: `<key>.partial` directories and
+ * `<key>.first.*` frames whose entry has since been published. Killing the
+ * app mid-decode is ordinary, and neither file is ever picked up again.
+ */
+export async function sweepPartials(cacheDir: string): Promise<void> {
+  const names = await fsp.readdir(cacheDir).catch(() => [] as string[]);
+  for (const name of names) {
+    if (name.endsWith('.partial')) {
+      await fsp.rm(path.join(cacheDir, name), { recursive: true, force: true }).catch(() => {});
+      continue;
+    }
+    if (!name.includes('.first.')) continue;
+    // A first frame is only live while its entry is still being decoded, and no
+    // decode survives a restart.
+    await fsp.rm(path.join(cacheDir, name), { force: true }).catch(() => {});
+  }
+}
+
 /** §7: on startup, LRU-evict whole entries until the total is under the cap. */
 export async function evictCache(cacheDir: string, limit = CACHE_LIMIT_BYTES): Promise<number> {
   const entries = await listCache(cacheDir);
@@ -379,6 +773,11 @@ export async function evictCache(cacheDir: string, limit = CACHE_LIMIT_BYTES): P
 export async function clearCache(cacheDir: string): Promise<void> {
   for (const entry of await listCache(cacheDir)) {
     await fsp.rm(path.join(cacheDir, entry.key), { recursive: true, force: true }).catch(() => {});
+  }
+  // Phase-one frames live beside the entries, so a clear has to sweep them too.
+  for (const name of await fsp.readdir(cacheDir).catch(() => [] as string[])) {
+    if (!name.includes('.first.')) continue;
+    await fsp.rm(path.join(cacheDir, name), { force: true }).catch(() => {});
   }
 }
 
@@ -405,6 +804,7 @@ export async function importClipboardImage(
   cacheDir: string,
   bytes: Buffer,
   mimeType: string,
+  onProgress?: ProgressSink,
 ): Promise<ImportResult> {
   const ext = CLIPBOARD_EXTENSIONS[mimeType];
   if (!ext) return { ok: false, error: `Clipboard image type ${mimeType} is not supported.` };
@@ -423,5 +823,5 @@ export async function importClipboardImage(
     }
   }
 
-  return importMedia({ cacheDir, sourcePath: file });
+  return importMedia({ cacheDir, sourcePath: file, onProgress });
 }

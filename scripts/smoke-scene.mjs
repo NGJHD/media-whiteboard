@@ -218,6 +218,41 @@ console.log('=== transparent background (§12) ===');
   }
 }
 
+/* -- Animated transparency reaches the file, in both formats (§12) --------- */
+
+console.log('');
+console.log('=== animated transparent export, both formats (§12) ===');
+for (const format of ['webp', 'gif']) {
+  const out = path.join(workDir, `scene-alpha-anim.${format}`);
+  const at = await renderDoc(
+    `alpha-${format}`,
+    `
+      await importFiles([${JSON.stringify(path.join(root, 'test-fixtures', 'anim-10fps-2s.gif'))}], { x: 0, y: 0 });
+      await window.__mwIdle();
+      store.getState().apply('setup', (d) => {
+        d.canvasRect = { x: -160, y: -90, width: 320, height: 180 };
+        d.background = { transparent: true, color: '#ffffff' };
+        d.outputPath = ${JSON.stringify(out)};
+        d.format = ${JSON.stringify(format)};
+        d.objects[0].x = 0;
+        d.objects[0].y = 0;
+        d.objects[0].width = 100;
+        d.objects[0].height = 100;
+      });
+    `,
+    out,
+    320,
+    180,
+  );
+
+  if (at) {
+    // Neither encoder may composite the frame onto a background of its own:
+    // whatever a viewer chooses to show behind it, the file must carry alpha.
+    c.truthy(`${format}: corner is fully transparent`, at(4, 4)[3] === 0, `alpha ${at(4, 4)[3]}`);
+    c.truthy(`${format}: the layer is opaque`, at(160, 90)[3] === 255, `alpha ${at(160, 90)[3]}`);
+  }
+}
+
 /* -- 5. Zero animated layers gives a single-frame file (§12 step 3) -------- */
 
 console.log('');

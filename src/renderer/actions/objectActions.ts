@@ -127,20 +127,6 @@ export function pasteClipboard(): void {
   setSelection(copies.map((o) => o.id));
 }
 
-export function duplicateSelection(): void {
-  const objects = useStore.getState().selectedObjects();
-  if (objects.length === 0) return;
-  const { apply, setSelection } = useStore.getState();
-
-  const copies = objects.map((o) => ({ ...structuredClone(o), id: newId(), x: o.x + 10, y: o.y + 10 }));
-  for (const copy of copies) clampObjectToWorld(copy);
-
-  apply('Duplicate', (draft) => {
-    draft.objects.push(...copies);
-  });
-  setSelection(copies.map((o) => o.id));
-}
-
 export function selectAll(): void {
   const { doc, setSelection } = useStore.getState();
   setSelection(doc.objects.filter((o) => !o.locked).map((o) => o.id));

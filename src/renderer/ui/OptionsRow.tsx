@@ -1,15 +1,20 @@
 import type { SceneObject, ShapeObject, TextObject } from '../../shared/doc';
-import { useStore } from '../state/store';
+import { clearPaint } from '../actions/canvasActions';
+import { useStore, type Tool } from '../state/store';
 import { useToolDefaults } from '../state/toolDefaults';
 
 /**
- * §9 options row. One row, three states, in this precedence:
+ * §9 options section. One strip, three states, in this precedence:
  *
  * 1. A drawing tool is active -> that tool's creation options, which become the
  *    defaults for the next object drawn.
  * 2. Select with a selection -> the properties of the selected object(s),
  *    live-editable, one undo entry per edit.
  * 3. Select with nothing selected -> empty.
+ *
+ * It is the only part of the top bar that scrolls: at the 1280 px minimum window
+ * width the Text tool's controls are wider than the space left over, and the
+ * canvas settings and tool buttons to its left must never move.
  */
 export function OptionsRow() {
   const tool = useStore((s) => s.tool);
@@ -19,9 +24,26 @@ export function OptionsRow() {
   if (tool !== 'select') return <ToolOptions />;
 
   const selected = doc.objects.filter((o) => selection.includes(o.id));
-  if (selected.length === 0) return <div className="topbar-row options" />;
+  if (!hasOptions('select', selected)) return <div className="options" />;
 
   return <SelectionProperties objects={selected} />;
+}
+
+/**
+ * Whether the options section has anything in it.
+ *
+ * The top bar needs this to decide whether to draw the divider that separates
+ * the tools from the options — a divider with nothing after it reads as a
+ * mistake. Shared rather than re-derived there, because the three states above
+ * are the definition and two copies of them would drift.
+ */
+export function hasOptions(tool: Tool, selected: SceneObject[]): boolean {
+  if (tool !== 'select') return true;
+  if (selected.length === 0) return false;
+  const kinds = new Set(selected.map((o) => o.kind));
+  // Media has no editable property of its own, and a mix of kinds has nothing
+  // in common (§9).
+  return kinds.size === 1 && selected[0]!.kind !== 'media';
 }
 
 /* -------------------------------------------------------------------------- */
@@ -30,11 +52,12 @@ export function OptionsRow() {
 
 function ToolOptions() {
   const tool = useStore((s) => s.tool);
+  const hasPaint = useStore((s) => s.doc.paint.strokes.length > 0);
   const defaults = useToolDefaults();
 
   if (tool === 'brush' || tool === 'eraser') {
     return (
-      <div className="topbar-row options">
+      <div className="options">
         {tool === 'brush' ? (
           <label className="field">
             Colour
@@ -46,7 +69,7 @@ function ToolOptions() {
             />
           </label>
         ) : null}
-        <label className="field wide">
+        <label className="field slider">
           Size
           <input
             type="range"
@@ -63,13 +86,20 @@ function ToolOptions() {
           />
           <span className="num">{tool === 'brush' ? defaults.brushSize : defaults.eraserSize}</span>
         </label>
+        {/* The eraser is a stroke tool (§6), so wiping the layer is a separate
+            action rather than a very large eraser. One undo entry. */}
+        {tool === 'eraser' ? (
+          <button disabled={!hasPaint} onClick={() => clearPaint()}>
+            Clear all drawing
+          </button>
+        ) : null}
       </div>
     );
   }
 
   if (tool === 'rect' || tool === 'ellipse') {
     return (
-      <div className="topbar-row options">
+      <div className="options">
         <label className="field">
           Stroke
           <input
@@ -82,6 +112,7 @@ function ToolOptions() {
         <label className="field">
           Width
           <input
+            className="tiny"
             type="number"
             min={0}
             max={200}
@@ -113,11 +144,12 @@ function ToolOptions() {
 
   if (tool === 'text') {
     return (
-      <div className="topbar-row options">
+      <div className="options">
         <FontPicker value={defaults.fontFamily} onChange={(v) => defaults.set({ fontFamily: v })} />
         <label className="field">
           Size
           <input
+            className="tiny"
             type="number"
             min={4}
             max={512}
@@ -164,7 +196,7 @@ function ToolOptions() {
     );
   }
 
-  return <div className="topbar-row options" />;
+  return <div className="options" />;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -193,38 +225,7 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
     });
   }
 
-  const kinds = new Set(objects.map((o) => o.kind));
-  const opacity = shared(objects, (o) => o.opacity);
-
-  const opacityControl = (
-    <label className="field wide">
-      Opacity
-      <input
-        type="range"
-        min={0}
-        max={100}
-        value={opacity === null ? 100 : Math.round(opacity * 100)}
-        onChange={(e) => {
-          const value = Number(e.target.value) / 100;
-          useStore.getState().applyMerged('Opacity', (draft) => {
-            for (const obj of draft.objects) {
-              if (ids.includes(obj.id)) obj.opacity = value;
-            }
-          });
-        }}
-      />
-      <span className="num">{opacity === null ? '—' : `${Math.round(opacity * 100)}%`}</span>
-    </label>
-  );
-
-  // Mixed kinds -> opacity only (§9).
-  if (kinds.size > 1) return <div className="topbar-row options">{opacityControl}</div>;
-
   const kind = objects[0]!.kind;
-
-  if (kind === 'media') {
-    return <div className="topbar-row options">{opacityControl}</div>;
-  }
 
   if (kind === 'shape') {
     const shapes = objects as ShapeObject[];
@@ -234,7 +235,7 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
     const noFill = shared(shapes, (o) => (o as ShapeObject).fill === null);
 
     return (
-      <div className="topbar-row options">
+      <div className="options">
         <label className="field">
           Stroke
           <input
@@ -252,6 +253,7 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
         <label className="field">
           Width
           <input
+            className="tiny"
             type="number"
             min={0}
             max={200}
@@ -296,7 +298,6 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
           />
           No fill
         </label>
-        {opacityControl}
       </div>
     );
   }
@@ -310,7 +311,7 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
   const hasShadow = shared(texts, (o) => (o as TextObject).shadow !== null);
 
   return (
-    <div className="topbar-row options">
+    <div className="options">
       <FontPicker
         value={fontFamily ?? ''}
         onChange={(v) =>
@@ -322,6 +323,7 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
       <label className="field">
         Size
         <input
+          className="tiny"
           type="number"
           min={4}
           max={512}
@@ -391,7 +393,6 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
         />
         Shadow
       </label>
-      {opacityControl}
     </div>
   );
 }
@@ -436,7 +437,7 @@ function FontPicker({ value, onChange }: { value: string; onChange(v: string): v
   return (
     <label className="field">
       Font
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <select className="font-picker" value={value} onChange={(e) => onChange(e.target.value)}>
         {value === '' ? <option value="">—</option> : null}
         {fonts.map((f) => (
           <option key={f} value={f}>

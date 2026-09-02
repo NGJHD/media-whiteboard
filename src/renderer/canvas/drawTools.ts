@@ -124,7 +124,7 @@ export function beginStroke(start: Point, tool: 'brush' | 'eraser'): DrawGesture
 /* -------------------------------------------------------------------------- */
 
 /**
- * Drag to draw. Alt constrains to a square or a perfect circle (§10).
+ * Drag to draw. **Shift** constrains to a square or a perfect circle (§10).
  *
  * The object is created up front and resized during the drag through
  * `applyMerged`, so it renders through `buildScene` like any other object and
@@ -137,12 +137,12 @@ export function beginShape(start: Point, shape: 'rect' | 'ellipse'): DrawGesture
   const label = `Draw ${shape} ${id}`;
   let created = false;
 
-  function geometry(point: Point, alt: boolean) {
+  function geometry(point: Point, constrain: boolean) {
     const to = { x: clampToWorld(point.x), y: clampToWorld(point.y) };
     let width = to.x - origin.x;
     let height = to.y - origin.y;
 
-    if (alt) {
+    if (constrain) {
       const side = Math.max(Math.abs(width), Math.abs(height));
       width = Math.sign(width || 1) * side;
       height = Math.sign(height || 1) * side;
@@ -156,8 +156,8 @@ export function beginShape(start: Point, shape: 'rect' | 'ellipse'): DrawGesture
     };
   }
 
-  function update(point: Point, alt: boolean): void {
-    const g = geometry(point, alt);
+  function update(point: Point, constrain: boolean): void {
+    const g = geometry(point, constrain);
 
     useStore.getState().applyMerged(label, (draft) => {
       let object = draft.objects.find((o) => o.id === id) as ShapeObject | undefined;
@@ -188,9 +188,9 @@ export function beginShape(start: Point, shape: 'rect' | 'ellipse'): DrawGesture
   }
 
   return {
-    move: (point, modifiers) => update(point, modifiers.alt),
+    move: (point, modifiers) => update(point, modifiers.shift),
     end(point, modifiers) {
-      update(point, modifiers.alt);
+      update(point, modifiers.shift);
 
       const store = useStore.getState();
       const object = store.doc.objects.find((o) => o.id === id);

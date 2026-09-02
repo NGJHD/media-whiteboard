@@ -11,6 +11,7 @@ import { drawOverlay } from './overlay';
 import { createInteraction, objectsIntersecting, type InteractionHandle } from './interaction';
 import { beginShape, beginStroke, placeText, type DrawGesture } from './drawTools';
 import { ContextMenu, type MenuState } from '../ui/ContextMenu';
+import { ImportProgress } from '../ui/ImportProgress';
 import { TextEditor } from '../ui/TextEditor';
 
 /** How far ahead to decode. Roughly half a second at typical output rates. */
@@ -25,6 +26,10 @@ const PREFETCH_FRAMES = 12;
  *
  * One shared requestAnimationFrame loop advances a global output frame index and
  * redraws once (§11). Never one timer per layer.
+ *
+ * The canvas is **always** fitted to the window (§4). There is no zoom and no
+ * pan, so the loop below refits whenever canvasRect or the viewport size has
+ * moved, wherever that change came from.
  */
 export function Viewport() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -33,8 +38,6 @@ export function Viewport() {
   const overlayRef = useRef<Konva.Layer | null>(null);
   const interactionRef = useRef<InteractionHandle | null>(null);
   const marqueeRef = useRef<{ origin: { x: number; y: number }; rect: Rect; additive: boolean } | null>(null);
-  const panRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
-  const spaceRef = useRef(false);
   const drawRef = useRef<DrawGesture | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
 
@@ -65,7 +68,15 @@ export function Viewport() {
     const observer = new ResizeObserver(resize);
     observer.observe(container);
 
-    /* ---- selection on empty space, marquee, panning (§10, §11) ---------- */
+    // Dev-only, like the hooks in main.tsx: where the transform handles ended up
+    // is not in the store, so a test that drives real pointer events has no
+    // other way to see it. Vite strips this from production builds.
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__mwProxyRect = (id: string) =>
+        interaction.proxyPosition(id);
+    }
+
+    /* ---- selection on empty space and marquee (§10, §11) ---------------- */
 
     stage.on('mousedown touchstart', (e) => {
       setMenu(null);
@@ -89,6 +100,11 @@ export function Viewport() {
             drawRef.current = beginShape(world, state.tool);
             return;
           case 'text':
+            // The default action of this mousedown is to focus the canvas, and
+            // it would land *after* the editor below has taken focus — blurring
+            // it, committing an empty string, and deleting the object before it
+            // was ever visible. Preventing it is what makes the Text tool work.
+            e.evt.preventDefault();
             placeText(world);
             return;
           default:
@@ -96,16 +112,6 @@ export function Viewport() {
         }
       }
 
-      // Space+drag, or the middle button, pans whatever is underneath (§11).
-      if (spaceRef.current || mouse.button === 1) {
-        panRef.current = {
-          x: pointer.x,
-          y: pointer.y,
-          offsetX: state.view.offsetX,
-          offsetY: state.view.offsetY,
-        };
-        return;
-      }
       if (mouse.button !== 0) return;
 
       const world = screenToWorld(state.view, pointer.x, pointer.y);
@@ -153,15 +159,6 @@ export function Viewport() {
         return;
       }
 
-      if (panRef.current) {
-        const pan = panRef.current;
-        state.setView({
-          offsetX: pan.offsetX + (pointer.x - pan.x),
-          offsetY: pan.offsetY + (pointer.y - pan.y),
-        });
-        return;
-      }
-
       const marquee = marqueeRef.current;
       if (!marquee) return;
       const world = screenToWorld(state.view, pointer.x, pointer.y);
@@ -190,7 +187,6 @@ export function Viewport() {
         return;
       }
 
-      panRef.current = null;
       const marquee = marqueeRef.current;
       marqueeRef.current = null;
       if (!marquee) return;
@@ -204,6 +200,24 @@ export function Viewport() {
 
     stage.on('mouseup touchend', finishPointer);
     stage.on('mouseleave', finishPointer);
+
+    // Double-click opens a text object for editing, which is how every editor
+    // behaves and is more discoverable than remembering the Text tool.
+    stage.on('dblclick dbltap', (e) => {
+      const state = useStore.getState();
+      if (state.tool !== 'select') return;
+      const pointer = stage.getPointerPosition();
+      if (!pointer) return;
+
+      const world = screenToWorld(state.view, pointer.x, pointer.y);
+      const hit = objectsAt(state.doc, world.x, world.y)[0];
+      if (hit?.kind !== 'text') return;
+
+      e.evt.preventDefault();
+      e.cancelBubble = true;
+      state.setSelection([hit.id]);
+      state.setEditingText(hit.id);
+    });
 
     /* ---- context menu (§11) --------------------------------------------- */
 
@@ -224,41 +238,8 @@ export function Viewport() {
       });
     });
 
-    /* ---- zoom at cursor (§11) ------------------------------------------- */
-
-    const onWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey) return;
-      event.preventDefault();
-      const rect = container.getBoundingClientRect();
-      const px = event.clientX - rect.left;
-      const py = event.clientY - rect.top;
-
-      const state = useStore.getState();
-      const before = screenToWorld(state.view, px, py);
-      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-      const scale = Math.min(Math.max(state.view.scale * factor, 0.05), 16);
-
-      // Keep the world point under the cursor fixed while zooming.
-      state.setView({ scale, offsetX: px - before.x * scale, offsetY: py - before.y * scale });
-    };
-    container.addEventListener('wheel', onWheel, { passive: false });
-
-    const onSpace = (event: KeyboardEvent) => {
-      if (event.code !== 'Space') return;
-      const target = event.target as HTMLElement | null;
-      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
-      spaceRef.current = event.type === 'keydown';
-      container.style.cursor = spaceRef.current ? 'grab' : '';
-      if (event.type === 'keydown') event.preventDefault();
-    };
-    window.addEventListener('keydown', onSpace);
-    window.addEventListener('keyup', onSpace);
-
     return () => {
       observer.disconnect();
-      container.removeEventListener('wheel', onWheel);
-      window.removeEventListener('keydown', onSpace);
-      window.removeEventListener('keyup', onSpace);
       interaction.destroy();
       stage.destroy();
       stageRef.current = null;
@@ -270,6 +251,13 @@ export function Viewport() {
     let raf = 0;
     let lastFrame = -1;
     let lastRevision = -1;
+    let lastFit = '';
+    // Whether the previous draw was made with frames still undecoded. Without
+    // this the run ends one draw too early: the bitmap lands *after* the last
+    // "still missing" pass, and the tick that would have shown it sees nothing
+    // changed and returns. That is why a dropped image only appeared once it
+    // was nudged.
+    let drewIncomplete = false;
     const startedAt = performance.now();
 
     const tick = () => {
@@ -281,6 +269,19 @@ export function Viewport() {
       const overlay = overlayRef.current;
       const interaction = interactionRef.current;
       if (!stage || !content || !overlay || !interaction) return;
+
+      // §4: the canvas is always fitted. Every route to a new canvasRect or a
+      // new viewport size funnels through here, so no caller has to remember.
+      const { canvasRect } = state.doc;
+      const fit = [
+        canvasRect.x, canvasRect.y, canvasRect.width, canvasRect.height,
+        state.viewport.width, state.viewport.height,
+      ].join(',');
+      if (fit !== lastFit) {
+        lastFit = fit;
+        state.fitToWindow();
+        return;
+      }
 
       const plan = planLoop(state.doc);
 
@@ -316,9 +317,11 @@ export function Viewport() {
 
       // Nothing to redraw if neither the frame nor the document has moved. A
       // static document therefore costs one scene build, not sixty a second.
-      if (!missing && !interacting && frame === lastFrame && state.revision === lastRevision) return;
+      const stale = missing || drewIncomplete;
+      if (!stale && !interacting && frame === lastFrame && state.revision === lastRevision) return;
       lastFrame = frame;
       lastRevision = state.revision;
+      drewIncomplete = missing;
 
       if (frame !== state.previewFrame) state.setPreviewFrame(frame);
 
@@ -368,6 +371,7 @@ export function Viewport() {
       }}
     >
       <TextEditor />
+      <ImportProgress />
       {menu ? <ContextMenu state={menu} onClose={() => setMenu(null)} /> : null}
     </div>
   );

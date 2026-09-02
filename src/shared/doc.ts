@@ -123,7 +123,7 @@ export const MAX_SOURCE_SECONDS = 30;
 export function createEmptyDoc(outputPath: string): Doc {
   return {
     canvasRect: { x: -640, y: -360, width: 1280, height: 720 },
-    background: { transparent: false, color: '#ffffff' },
+    background: { transparent: false, color: '#000000' },
     outputFps: 'auto',
     quality: 'high',
     format: 'webp',

@@ -37,7 +37,7 @@ export interface FfmpegInfo {
  * written by an older build are re-decoded instead of silently serving stale
  * metadata. The cache key covers the *source file*, not the decoder.
  */
-export const MEDIA_META_VERSION = 2;
+export const MEDIA_META_VERSION = 4;
 
 /** Written as meta.json beside the decoded frames. */
 export interface MediaMeta {
@@ -49,6 +49,37 @@ export interface MediaMeta {
   frameDurationsMs: number[];
   nativeWidth: number;
   nativeHeight: number;
+  /**
+   * Extension of the cached frame files, including the dot. Animated sources
+   * decode to `.png`; a static source keeps its own container, because the
+   * renderer can decode it as it stands and re-encoding it is the slowest step
+   * in the import (§7).
+   */
+  frameExt: string;
+  /**
+   * False while the background decode is still running (§7). The object is
+   * already placeable — only frame 0 exists on disk — and a `MediaProgress`
+   * event with `done: true` carries the completed meta.
+   */
+  complete: boolean;
+  /** Frames written so far. Equals frameCount once `complete`. */
+  readyFrames: number;
+}
+
+/**
+ * Emitted while a dropped source decodes in the background, one per pending
+ * item. Nothing about the import blocks on it: the object is already on the
+ * canvas by the time the first of these arrives.
+ */
+export interface MediaProgress {
+  cacheKey: string;
+  readyFrames: number;
+  totalFrames: number;
+  done: boolean;
+  /** The final metadata, once the decode succeeded. Null otherwise. */
+  meta: MediaMeta | null;
+  /** Set when the background decode failed; surfaced as a §14 toast. */
+  error: string | null;
 }
 
 export type ImportResult =
@@ -67,6 +98,18 @@ export const PROJECT_EXTENSION = 'mwproj';
 export type ProjectLoadResult =
   | { ok: true; path: string; data: ProjectFile }
   | { ok: false; cancelled: boolean; error: string | null };
+
+/**
+ * Per-installation conveniences that are deliberately not part of the Doc (§5):
+ * they belong to this copy of the app, not to a document, so they never reach a
+ * .mwproj or the undo stack.
+ */
+export interface Settings {
+  /** §12: the last directory an output was written to. */
+  lastOutputDir: string | null;
+  /** §7: the last directory Add media browsed. */
+  lastMediaDir: string | null;
+}
 
 export interface CacheInfo {
   dir: string;
@@ -98,6 +141,12 @@ export interface EncodeRequest {
   format: OutputFormat;
   quality: Quality;
   outputPath: string;
+  /**
+   * §5's `background.transparent`. The encoder pins its pixel format and its
+   * palette flags from this rather than leaving them to ffmpeg's negotiation —
+   * see the notes in encoder.ts.
+   */
+  transparent: boolean;
 }
 
 /** Weighted across the three GIF passes; WebP only ever reports 'rendering'. */
@@ -159,6 +208,20 @@ export interface Api {
   /** Resolves the OS path of a dropped File (Electron removed File.path). */
   pathForFile(file: File): string;
   importMedia(sourcePath: string): Promise<ImportResult>;
+  /** Background decode progress (§7). Returns an unsubscribe function. */
+  onMediaProgress(handler: (progress: MediaProgress) => void): () => void;
+  /**
+   * §7: abandons an entry's background decode, for when the layer it was
+   * feeding is gone. Fire and forget — there is nothing to wait for.
+   */
+  cancelImport(cacheKey: string): void;
+  getSettings(): Promise<Settings>;
+  setSettings(patch: Partial<Settings>): Promise<Settings>;
+  /**
+   * §12: the first name in this file's series that does not exist yet, so the
+   * default output never silently overwrites and Generate can be pressed twice.
+   */
+  uniqueOutputPath(candidate: string): Promise<string>;
   /** §11: Ctrl+V with an image on the clipboard. Bytes are written to a temp
    *  file first, so the normal §7 import path handles it unchanged. */
   importClipboardImage(bytes: number[], mimeType: string): Promise<ImportResult>;

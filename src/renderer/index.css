@@ -29,16 +29,27 @@ body {
 
 input, select, textarea { user-select: text; }
 
-/* Layout: fixed top and bottom bars, viewport takes the rest. */
+/* Layout: fixed top and bottom bars, viewport takes the rest.
+   `minmax(0, 1fr)` matters: a grid item's automatic minimum size is its
+   min-content width, so without it the no-wrap bars widen the column past the
+   window and body's overflow:hidden silently clips whatever is on the right —
+   which at 1280 px was About and Generate. */
 .app {
   height: 100%;
   display: grid;
   grid-template-rows: auto 1fr auto;
+  grid-template-columns: minmax(0, 1fr);
 }
+
+.topbar, .bottombar, .viewport { min-width: 0; }
 
 /* -------------------------------------------------------------------------- */
 /* Bars                                                                       */
 /* -------------------------------------------------------------------------- */
+
+/* §9: exactly three sections — top bar, canvas area, bottom bar. Each bar is a
+   single row that never wraps; only the options strip inside the top bar
+   scrolls, so nothing the user aims for changes position. */
 
 .topbar, .bottombar {
   background: var(--panel);
@@ -54,18 +65,42 @@ input, select, textarea { user-select: text; }
 .topbar-row, .bottombar-row {
   display: flex;
   align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  flex-wrap: nowrap;
+  min-height: 46px;
+}
+
+/* Separates canvas settings | tools | options, and output | generation.
+   Brighter than --line: at 1px on the panel colour the border grey is not
+   actually visible, which makes the grouping it exists to show invisible too. */
+.divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 26px;
+  background: #4a515c;
+  margin: 0 3px;
+}
+
+/* The one part of the top bar allowed to overflow. At 1280 px the Text tool's
+   controls are wider than the space left, and hiding them would be worse than
+   scrolling to them. */
+.options {
+  display: flex;
+  align-items: center;
   gap: 10px;
-  padding: 8px 12px;
-  flex-wrap: wrap;
-  min-height: 44px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  padding-bottom: 1px;
 }
 
-.topbar-row + .topbar-row,
-.bottombar-row + .bottombar-row {
-  border-top: 1px solid var(--line);
-}
-
-.topbar-row.options { min-height: 44px; }
+.options::-webkit-scrollbar { height: 6px; }
+.options::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.options::-webkit-scrollbar-track { background: transparent; }
 
 /* -------------------------------------------------------------------------- */
 /* Controls                                                                   */
@@ -78,16 +113,16 @@ input, select, textarea { user-select: text; }
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
-.field.grow { flex: 1; }
-.field.wide { min-width: 190px; }
-.field .num { min-width: 34px; color: var(--text); font-variant-numeric: tabular-nums; }
+.field.grow { flex: 1 1 auto; min-width: 90px; }
+.field .num { min-width: 26px; color: var(--text); font-variant-numeric: tabular-nums; }
 
 input[type='text'], input:not([type]), input[type='number'], select, textarea {
   font: inherit;
   font-size: 13px;
-  padding: 5px 8px;
+  padding: 5px 7px;
   border-radius: 5px;
   border: 1px solid var(--line);
   background: #1e2126;
@@ -95,19 +130,24 @@ input[type='text'], input:not([type]), input[type='number'], select, textarea {
   min-width: 0;
 }
 
-.field.grow input { flex: 1; }
-.field input[inputMode='numeric'], .field input[type='number'] { width: 76px; }
+.field.grow input { flex: 1; width: 100%; }
 
-input[type='range'] { accent-color: var(--accent); flex: 1; min-width: 90px; }
+/* Four digits, not a million pixels. */
+.field input.dim, .field input.tiny { width: 56px; }
+.field select.font-picker { max-width: 132px; }
+
+.field.slider input[type='range'] { flex: 0 0 auto; width: 108px; }
+input[type='range'] { accent-color: var(--accent); min-width: 80px; }
 
 input.swatch, .swatch {
-  width: 30px;
+  width: 28px;
   height: 26px;
   padding: 2px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: #1e2126;
   cursor: pointer;
+  flex: 0 0 auto;
 }
 
 .swatch:disabled { opacity: 0.35; cursor: default; }
@@ -120,6 +160,7 @@ input.swatch, .swatch {
   font-size: 12px;
   white-space: nowrap;
   cursor: pointer;
+  flex: 0 0 auto;
 }
 
 .checkbox input { accent-color: var(--accent); }
@@ -127,13 +168,14 @@ input.swatch, .swatch {
 button {
   font: inherit;
   font-size: 13px;
-  padding: 6px 12px;
+  padding: 6px 11px;
   border-radius: 5px;
   border: 1px solid var(--line);
   background: var(--panel-2);
   color: var(--text);
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 button:hover:not(:disabled) { background: #343941; }
@@ -148,31 +190,55 @@ button.primary {
 button.primary:hover:not(:disabled) { background: #37699f; }
 button.ghost { background: transparent; }
 
-button.tool { min-width: 66px; }
-button.tool.active {
+/* Square icon buttons: tools, undo/redo, add media, about (§9). */
+.iconbtn {
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+}
+
+.iconbtn.active {
   background: #2f5c96;
   border-color: #3d6ea8;
   color: #fff;
 }
 
-.toggles { display: flex; gap: 4px; }
-.toggle { width: 30px; padding: 6px 0; text-align: center; }
+.iconbtn .icon { display: block; }
+
+.toggles { display: flex; gap: 4px; flex: 0 0 auto; }
+.toggle { width: 28px; padding: 6px 0; text-align: center; }
 .toggle.active { background: #2f5c96; border-color: #3d6ea8; }
 
 .inline-error {
   color: var(--danger);
   font-size: 12px;
+  flex: 0 0 auto;
 }
 
+ /* The only thing in the bottom bar that may be sacrificed for width: the
+    path, the settings and Generate all have to stay usable. */
 .estimate {
-  margin-left: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   align-items: flex-end;
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.estimate span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .estimate .capped { color: var(--warn); }
@@ -189,6 +255,46 @@ button.tool.active {
 }
 
 .viewport canvas { display: block; }
+
+/* §7: one non-blocking bar per source still decoding. Sits inside the canvas
+   area so the app stays three sections and the canvas never resizes (and so
+   never refits) just because a file was dropped. */
+.import-progress {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 14;
+  pointer-events: none;
+}
+
+.import-job {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: rgba(36, 39, 44, 0.94);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.import-job .import-name {
+  flex: 0 1 auto;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.import-job .bar { flex: 1 1 auto; }
+.import-job .import-count { font-variant-numeric: tabular-nums; flex: 0 0 auto; }
 
 /* -------------------------------------------------------------------------- */
 /* Toasts (§14)                                                               */
@@ -315,15 +421,6 @@ button.tool.active {
 .context-menu button:hover:not(:disabled) { background: #38424f; }
 .context-menu hr { border: none; border-top: 1px solid var(--line); margin: 4px 2px; width: 100%; }
 
-.menu-slider {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 /* -------------------------------------------------------------------------- */
 /* In-place text editor (§10)                                                 */
 /* -------------------------------------------------------------------------- */
@@ -333,7 +430,10 @@ button.tool.active {
   z-index: 12;
   margin: 0;
   padding: 0;
-  border: 1px dashed var(--accent);
+  /* Solid, not dashed: while this is open it is the only box on screen (§10),
+     so it should read as the thing being edited rather than as a second
+     selection sitting inside the first. */
+  border: 1px solid var(--accent);
   border-radius: 2px;
   background: transparent;
   resize: none;
@@ -349,7 +449,7 @@ button.tool.active {
 /* -------------------------------------------------------------------------- */
 
 .modal.wide { width: min(620px, 92vw); }
-.about-button { margin-left: auto; }
+.about-button { margin-left: 2px; }
 
 dl.about {
   display: grid;
@@ -382,4 +482,16 @@ dl.about dd {
 
 .about-cache > div { flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .about-cache strong { font-size: 13px; font-weight: 600; }
+
+/* The §7 cache-fallback notice. It had no rule at all, so the one thing in the
+   dialog that is a warning read as body text. */
+p.warn {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #6b5a1f;
+  border-radius: 7px;
+  background: #2c2718;
+  color: var(--text);
+  font-size: 12px;
+}
 .about-cache .sub { margin: 0; font-size: 11px; color: var(--muted); }

@@ -116,8 +116,12 @@ Everything lives in a single **world coordinate space** in pixels.
 
 This is why nothing shifts on resize: the objects don't move, the window moves.
 
-**View transform**: `viewScale` and `viewOffset` map world → screen. On load and on
-"Fit to window", `viewScale` auto-fits `canvasRect` into the viewport.
+**View transform**: `viewScale` and `viewOffset` map world → screen, and they are
+**always** the fit of `canvasRect` into the viewport. There is no zoom and no pan:
+no wheel zoom, no space-drag, no "Fit to window" command, because there is no
+other state to return from. Anything that changes `canvasRect` or the viewport
+size — a width/height entry, Trim to fit, an undo, a project load, resizing the
+window — refits. Enforce that in one place rather than at each call site.
 
 **Limits**: `canvasRect` width and height are each capped at **2560 px**. Reject
 values above that with an inline message; do not silently clamp.
@@ -227,10 +231,36 @@ or trimming to fit never resamples or crops paint.
 1. `ffprobe` the file for duration, dimensions, and frame count.
 2. **Reject** any source longer than **30 seconds** with a toast. Reject unsupported
    or corrupt files with a toast. Both cases: ignore the file, do not add a layer.
-3. Decode to a frame sequence (see below).
+3. Decode **one frame**, and place the object with it.
 4. Place the object **centered at the cursor**, at native size. If native size exceeds
    `canvasRect` in either dimension, scale down proportionally to fit. Never scale up.
-5. The canvas is **never** auto-resized to match dropped media.
+5. Switch back to the Select tool, so the new object can be moved immediately.
+6. Decode the rest **in the background** (see below).
+7. The canvas is **never** auto-resized to match dropped media.
+
+**A drop must never block the UI.** Nothing waits for the full decode: the object
+is on the canvas, selected and manipulable, as soon as one frame exists. While the
+rest decodes, show a **non-blocking progress bar per pending item** inside the
+canvas area, and let a media node fall back to the last frame it drew rather than
+disappearing. Generate is disabled until every decode has finished — that is the
+only thing that waits.
+
+**A decode exists to feed a layer.** When that layer goes — deleted, undone away,
+replaced by a project load — kill the decode and delete its partial output.
+Derive that from the document rather than hooking each removal path; there is
+more than one way to remove an object. A cancellation is not an error and gets no
+toast.
+
+**Verify the first frame decodes before placing the object.** A copied static
+source is bytes this app has never looked at. Better one toast and no layer than
+an object that silently draws nothing.
+
+**Probe cost is part of the drop.** Reading per-frame timestamps means decoding the
+whole file, so only ask for them where they carry information: GIF and animated
+WebP have meaningful per-frame delays, video containers do not. For video, take the
+duration from the stream, the container format, or the `DURATION` tag — Matroska
+has no stream duration and a missing one must not be read as zero — and the timing
+from `avg_frame_rate`, uniform across frames.
 
 Accepted inputs: `.gif`, `.webp` (static and animated), `.png`, `.jpg/.jpeg`, `.bmp`,
 `.mp4`, `.mov`, `.webm`, `.mkv`, `.avi`.
@@ -241,20 +271,31 @@ Decode at the source's **native frame rate**, never at `outputFps`. Changing the
 dropdown must not invalidate the cache — resampling happens at render time (§8).
 
 ```
-ffmpeg -i <source> -vsync 0 <cacheDir>/<cacheKey>/%06d.webp -lossless 1
+ffmpeg -i <source> -an -fps_mode passthrough -c:v png -compression_level 1        <cacheDir>/<cacheKey>/%06d.png
 ```
 
 Write a sibling `meta.json` with `frameCount`, `frameDurationsMs[]`,
-`nativeWidth`, `nativeHeight`.
+`nativeWidth`, `nativeHeight`, `frameExt`.
 
-Static images: one frame, `frameCount = 1`.
+**A static source is copied, not encoded.** One frame is one frame; if the
+renderer can decode the file as it stands — png, jpg, bmp, webp, gif — copy it
+into the entry and let `createImageBitmap` do the work. Encoding it first buys a
+different container for the slowest step in the whole import.
+
+**Cache frames must be cheap to write, not small.** This is the single biggest
+cost in an import, and the encoder choice dominates it. Measured on the reference
+machine at 1080x2520: lossless WebP took 38 s per 40 frames, PNG 0.9 s. A 17 s
+clip went from roughly sixteen minutes to eight seconds; a 3456x5184 JPEG from
+eleven seconds to none at all. Both are lossless, so output fidelity is
+identical — the trade is cache size, which the LRU cap already governs.
 
 ### Cache
 
 - **Location**: `<appFolder>/cache/`. If not writable, fall back to
   `<os.tmpdir()>/media-whiteboard-cache/` and note it in the app's About dialog.
 - **Key**: SHA-256 of `sourcePath + mtimeMs + fileSize`, truncated to 16 hex chars.
-- **Format**: lossless WebP frames.
+- **Format**: lossless. PNG for anything decoded; a copied static source keeps its
+  own container. `meta.frameExt` records which.
 - **Persistence**: survives across sessions. Never cleared on exit.
 - **Eviction**: on startup, LRU-evict whole cache entries until total size ≤ **5 GB**.
 - **UI**: a "Clear cache" button showing current size (in a Settings or About dialog).
@@ -289,6 +330,9 @@ Rules:
 - **Normalise degenerate GIF delays first**: any `frameDurationMs < 20` is treated as
   100 ms, matching browser behaviour for malformed GIFs. Without this, a single junk
   frame reports several hundred fps.
+  **This applies to GIF and animated WebP only.** 16.68 ms is what 59.94 fps video
+  looks like, not a malformed delay; rewriting those to 100 ms makes a 17 s clip
+  measure 102 s and be rejected by §7's duration limit.
 - **Cap at 60**, even if a 120 fps source is dropped in.
 - **No animated layers** → Auto displays as `Auto (—)` and fps is irrelevant; output is
   static (§12).
@@ -351,27 +395,36 @@ frame roughly once per second. This is inherent to the sampling rule and is acce
 
 ## 9. UI layout
 
+The app is exactly **three sections**: the top bar, the canvas area, the bottom
+bar. Each bar is a **single row that never wraps**.
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ TOP BAR                                                      │
-│  W [1280] H [720]  [Trim to fit]  ☐ Transparent  [■ color]   │
-│  ─────────────────────────────────────────────────────────   │
-│  Tools: Select | Brush | Eraser | Text | Rect | Ellipse       │
-│  Options row: active tool's options, or selection properties  │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│                    CANVAS VIEWPORT                           │
-│           (checkerboard when transparent)                    │
-│                                                              │
-├──────────────────────────────────────────────────────────────┤
-│ BOTTOM BAR                                                   │
-│  Output: [C:\...\out.webp] [Browse]                          │
-│  Format [WebP ▾]  FPS [Auto (24) ▾]  Quality [High ▾]  [Generate] │
-└──────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│ TOP BAR (one row)                                                          │
+│ W[1280] H[720] [Trim to fit] ☐Transparent [■] [+media] │ ▶ ↶ ↷ 🖌 ⌫ T □ ○ │ …options… [i] │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                            │
+│                    CANVAS AREA (checkerboard when transparent)             │
+│                    always fitted to the window (§4)                        │
+│                    decode progress bars overlay the bottom                 │
+│                                                                            │
+├────────────────────────────────────────────────────────────────────────────┤
+│ BOTTOM BAR (one row)                                                       │
+│ Output [C:\...\out.webp] [Browse] │ Format[WebP▾] FPS[Auto(24)▾] Quality[High▾] est. [Generate] │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Defaults: canvas **1280 × 720**, background solid white, fps **Auto**, quality
-**High**, format **WebP**.
+- Tools are **square icon buttons**, not text. Undo and Redo sit between Select and
+  Brush — they are used constantly and belong in the same reach as the tools.
+- Vertical dividers separate the three groups in the top bar (canvas settings |
+  tools | options) and the two in the bottom bar (output | generation).
+- **Minimum window size 1280 × 720.** Everything except the options section is
+  fixed-width and always reachable at that size; the options section is the only
+  thing allowed to scroll horizontally, so the controls to its left never move.
+- The output path is a normal **editable** field. Browse is a convenience.
+
+Defaults: canvas **1280 × 720**, background solid **black**, fps **Auto**, quality
+**High**, format **WebP**. Brush, shape stroke and text colour all default to red.
 
 ### The options row
 
@@ -381,19 +434,25 @@ One row, three states, in this precedence:
    creation options, which become the defaults for the next object drawn.
 2. **Select is active with a selection** → the **properties of the selected
    object(s)**, live-editable. Editing a control mutates the selection immediately;
-   each edit is one undo entry. This is the primary way to change an object after
-   creation — the context menu's Properties… (§11) opens the same controls in a
-   dialog and exists for discoverability, not as the only route.
-3. **Select is active with nothing selected** → the row is empty.
+   each edit is one undo entry. This is the only way to change an object after
+   creation.
+3. **Select is active with nothing selected** → the section is empty.
+
+The Eraser's options carry a **Clear all drawing** button beside its size. Wiping
+the layer is a different action from erasing, not a very large eraser, and it goes
+through the document so undo replays correctly (§6).
 
 Per-kind properties, matching the fields in §5:
 
 | Selection | Controls |
 |---|---|
-| Media | opacity |
-| Shape | stroke color, stroke width, fill color, No fill, opacity |
-| Text | font family, size, bold, italic, color, outline, shadow, opacity |
-| Mixed kinds | opacity only |
+| Media | *(none — the section is empty)* |
+| Shape | stroke color, stroke width, fill color, No fill |
+| Text | font family, size, bold, italic, color, outline, shadow |
+| Mixed kinds | *(none — the section is empty)* |
+
+`opacity` stays in the model (§5) and is honoured by `buildScene`, but **it has no
+UI**. There is no opacity control anywhere.
 
 With a multi-selection of one kind, show the shared controls. A control whose value
 differs across the selection renders blank/indeterminate; setting it applies that
@@ -457,7 +516,15 @@ join. Interpolate between pointer events so fast strokes don't gap.
 
 - Click to place, then edit **in place** via a positioned DOM `<textarea>` overlaid on
   the canvas and styled to match. Commit on blur or `Ctrl+Enter`; cancel on `Esc`.
-- Multi-line.
+- **Double-click an existing text object to edit it.**
+- While the editor is open it is the **only** box on screen: hide the Konva text
+  node, the selection outline and the transform handles. Two rectangles of
+  different sizes stacked on each other read as a bug, not as an editor.
+- Multi-line. The box **grows downward** to fit; it must never scroll. Height is
+  auto-computed from the wrapped result anyway, so the editor measures its own
+  content and matches. On commit the **top edge** stays put — the model stores a
+  centre, so writing a taller height without moving it would jump the finished
+  text upward the moment the editor closed.
 - Options: system font family, size, style (bold/italic), color, optional outline,
   optional shadow.
 - **Resize reflows**: dragging a horizontal handle changes `boxWidth` and the text
@@ -470,7 +537,7 @@ join. Interpolate between pointer events so fast strokes don't gap.
 
 ### Rect / Ellipse
 
-- Drag to draw. **Hold `Alt` to constrain** to a square / perfect circle.
+- Drag to draw. **Hold `Shift` to constrain** to a square / perfect circle.
 - Options: stroke color, stroke width, fill color, and a "No fill" toggle.
 - Shapes are `SceneObject`s — selectable, movable, deletable, editable after creation.
 
@@ -485,6 +552,10 @@ join. Interpolate between pointer events so fast strokes don't gap.
 - Snap targets: other objects' left / center-x / right and top / center-y / bottom,
   **plus** `canvasRect`'s edges and center.
 - Show a thin guide line for each active snap while dragging or resizing.
+- **The transform handles snap with the object.** The snapped position and the
+  pointer differ by up to the threshold; the box, the handles and the object must
+  all end up on the same rectangle, or the handles visibly lag the thing they
+  belong to.
 - Hold `Ctrl` to temporarily disable snapping.
 
 ### Keyboard
@@ -497,20 +568,25 @@ join. Interpolate between pointer events so fast strokes don't gap.
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
 | `Ctrl+C` / `Ctrl+V` | Copy / paste objects (offset by 10, 10) |
 | `Ctrl+V` with image on clipboard | Paste as new media object |
-| `Ctrl+D` | Duplicate |
 | `Ctrl+A` | Select all |
 | `Ctrl+S` / `Ctrl+O` | Save / open project |
 | `Esc` | Deselect, or cancel in-progress text edit |
-| `Space`+drag | Pan |
-| `Ctrl`+wheel | Zoom at cursor |
-| `Ctrl+0` | Fit to window |
+
+There are no view shortcuts. §4 leaves nothing to zoom, pan or re-fit.
 
 ### Context menu (right-click an object)
 
-Delete · Duplicate · — · Bring to Front · Bring Forward · Send Backward · Send to Back
-· — · Opacity slider · Properties…
+Delete · — · Bring Forward · Send Backward · Bring to Front · Send to Back
 
-Right-click on empty canvas: Paste · Select All · Fit to window.
+The one-step moves come first: they are the ones reached for repeatedly.
+
+Right-click on empty canvas: Paste · Select All.
+
+Nothing else belongs here. Z-order has no other home (§5), and everything that does
+— object properties — lives in the options row where it is visible without a click.
+
+The menu **flips to the other side of the cursor** rather than being clipped when it
+is opened near an edge of the canvas area.
 
 ### Undo/redo
 
@@ -592,8 +668,15 @@ ffmpeg -y -f rawvideo -pix_fmt rgba -s <W>x<H> -r <fps> -i <scratch>        -i <
 - **GIF**: warn once that soft/anti-aliased transparent edges will look ragged, since
   GIF alpha is 1-bit.
 - **Cancel**: kill the ffmpeg process and **delete the partial output file**.
-- Remember and reuse the **last used output directory**. Prompt before overwriting an
-  existing file.
+- Remember the **last used output directory** and the **last directory Add media
+  browsed**, across sessions, in a settings file inside the app folder (§1). Neither
+  belongs in the `Doc` (§5) or in a project file (§13).
+- **The suggested output name is always one that does not exist.** `output.webp`
+  becomes `output2.webp`, then `output3.webp`; a name already ending in digits
+  continues its own run. Apply it when seeding the path at startup, when the format
+  changes the extension, and again after a successful Generate — so Generate can be
+  pressed twice without a dialog in between. Still prompt before overwriting a path
+  the user typed or chose themselves.
 
 Show an estimated output size before export starts. Animated WebP grows fast.
 
@@ -643,6 +726,10 @@ Every one of these is a toast plus a no-op — never a crash, never a silent fai
   - Pin the exact ffmpeg build (BtbN or gyan.dev). Record its version, license, and
     source URL in `THIRD-PARTY-NOTICES.md` and ship that file inside the zip — LGPL
     redistribution still requires corresponding source to be available.
+- The app icon lives at `build/icon.png` (square, at least 256 px). electron-builder
+  compiles it into the exe; in dev the window points at the same file.
+- Any third-party asset that ships — icons included — is listed in
+  `THIRD-PARTY-NOTICES.md` with its licence.
 - Final deliverable: a zip of the output folder containing `MediaWhiteboard.exe`.
 
 ---
@@ -671,6 +758,7 @@ Build in this sequence. Do not start a step before the previous one runs end to 
 
 Do not build these unless explicitly asked later:
 
+- Manual zoom or pan of the canvas (§4: it is always fitted)
 - Timeline / filmstrip / seek bar / scrubbing
 - Per-layer trim in/out points or start offsets
 - Audio in any form (strip it from every source)

@@ -1,7 +1,6 @@
 import {
   copySelection,
   deleteSelection,
-  duplicateSelection,
   nudgeSelection,
   pasteClipboard,
   selectAll,
@@ -11,8 +10,8 @@ import { useStore, type Tool } from './store';
 /**
  * Global shortcuts (CLAUDE.md §11).
  *
- * `Space`+drag panning and `Ctrl`+wheel zoom live in the Viewport, next to the
- * pointer state they need.
+ * There are no view shortcuts: the canvas is always fitted to the window (§4),
+ * so there is nothing to zoom, pan or re-fit.
  */
 
 const TOOL_KEYS: Record<string, Tool> = {
@@ -67,10 +66,6 @@ export function installShortcuts(): () => void {
           event.preventDefault();
           void pasteFromClipboard();
           return;
-        case 'd':
-          event.preventDefault();
-          duplicateSelection();
-          return;
         case 'a':
           event.preventDefault();
           selectAll();
@@ -82,10 +77,6 @@ export function installShortcuts(): () => void {
         case 'o':
           event.preventDefault();
           void state.openProject();
-          return;
-        case '0':
-          event.preventDefault();
-          state.fitToWindow();
           return;
         default:
           return;
@@ -163,10 +154,14 @@ async function pasteImageFromClipboard(): Promise<void> {
 
       const { importMetaAsObject } = await import('../media/importMedia');
       const { canvasRect } = useStore.getState().doc;
-      importMetaAsObject(result.meta, {
+      const placed = await importMetaAsObject(result.meta, {
         x: canvasRect.x + canvasRect.width / 2,
         y: canvasRect.y + canvasRect.height / 2,
       });
+      if (!placed) {
+        window.api.cancelImport(result.meta.cacheKey);
+        store.toast('error', 'Could not decode the clipboard image.');
+      }
       return;
     }
     store.toast('info', 'No image on the clipboard.');

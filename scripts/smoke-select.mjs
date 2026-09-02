@@ -216,7 +216,7 @@ console.log('');
 console.log('=== undo / redo (§11) ===');
 {
   const r = await run('undo', `
-    const { deleteSelection, duplicateSelection, nudgeSelection } = await import('/actions/objectActions.ts');
+    const { deleteSelection, nudgeSelection } = await import('/actions/objectActions.ts');
 
     const before = s().doc.objects.length;
     s().setSelection(['b']);
@@ -319,13 +319,13 @@ console.log('=== group resize maths (§10) ===');
   }
 }
 
-/* -- Copy / paste / duplicate (§11) ---------------------------------------- */
+/* -- Copy / paste (§11) ---------------------------------------------------- */
 
 console.log('');
-console.log('=== copy, paste, duplicate (§11) ===');
+console.log('=== copy and paste (§11) ===');
 {
   const r = await run('clipboard', `
-    const { copySelection, pasteClipboard, duplicateSelection } = await import('/actions/objectActions.ts');
+    const { copySelection, pasteClipboard } = await import('/actions/objectActions.ts');
 
     s().setSelection(['b']);
     copySelection();
@@ -333,19 +333,18 @@ console.log('=== copy, paste, duplicate (§11) ===');
     const pasted = s().doc.objects[s().doc.objects.length - 1];
     const original = s().doc.objects.find((o) => o.id === 'b');
 
-    s().setSelection(['b']);
-    duplicateSelection();
-    const dup = s().doc.objects[s().doc.objects.length - 1];
+    pasteClipboard();
+    const second = s().doc.objects[s().doc.objects.length - 1];
 
     return { ok: true,
       count: s().doc.objects.length,
       offset: [pasted.x - original.x, pasted.y - original.y],
-      uniqueId: pasted.id !== 'b' && dup.id !== pasted.id,
-      selectionIsCopy: s().selection.length === 1 && s().selection[0] === dup.id };
+      uniqueId: pasted.id !== 'b' && second.id !== pasted.id,
+      selectionIsCopy: s().selection.length === 1 && s().selection[0] === second.id };
   `);
 
   if (r) {
-    c.check('paste then duplicate adds two objects', r.count, 5);
+    c.check('two pastes add two objects', r.count, 5);
     c.check('offset by 10, 10', r.offset, [10, 10]);
     c.truthy('copies get fresh ids', r.uniqueId);
     c.truthy('the copy ends up selected', r.selectionIsCopy);

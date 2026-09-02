@@ -29,6 +29,8 @@ asarUnpack:
   - resources/bin/**
 
 win:
+  # 512x512 PNG in buildResources; electron-builder compiles it into the exe.
+  icon: build/icon.png
   target:
     - target: dir
       arch: [x64]

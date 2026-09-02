@@ -1,6 +1,6 @@
 import Konva from 'konva';
 import type { Doc, LayerId, SceneObject, ShapeObject, TextObject, MediaObject } from '../../shared/doc';
-import { peek } from '../media/bitmapCache';
+import { peekOrLast } from '../media/bitmapCache';
 import { getPaintCanvas } from '../paint/paintBuffer';
 import { resolveFps, sourceFrameIndex } from './timing';
 
@@ -127,11 +127,11 @@ function buildObject(
 
 function buildMedia(obj: MediaObject, frameIndex: number, fps: number): Konva.Shape | null {
   const sourceIndex = sourceFrameIndex(obj, frameIndex, fps);
-  const bitmap = peek(obj.cacheKey, sourceIndex);
-
-  // An undecoded frame draws nothing rather than a blank rectangle — the preview
-  // loop will pick it up once the bitmap lands. Export prefetches first (§3), so
-  // this branch must not be reachable there.
+  // An undecoded frame falls back to the last one this layer drew, and to
+  // nothing at all if it has never drawn. Export prefetches every frame it needs
+  // before drawing (§3), so it always gets the exact frame and neither branch is
+  // reachable there.
+  const bitmap = peekOrLast(obj.cacheKey, sourceIndex);
   if (!bitmap) return null;
 
   return new Konva.Image({ ...commonProps(obj), image: bitmap });

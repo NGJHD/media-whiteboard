@@ -58,6 +58,43 @@ Electron 44.1.1 — MIT. Bundles Chromium (BSD-3-Clause and others) and Node.js
 (MIT). Chromium's full licence set ships in the release as
 `LICENSES.chromium.html`, and Electron's as `LICENSE.electron.txt`.
 
+## Lucide icons
+
+The tool, undo/redo, add-media and about glyphs in the top bar are Lucide icons
+(`mouse-pointer-2`, `undo-2`, `redo-2`, `paintbrush`, `eraser`, `type`, `square`,
+`circle`, `image-plus`, `info`), from **lucide-static v0.545.0**, **ISC licence**.
+
+Source: https://github.com/lucide-icons/lucide
+
+The path data is inlined into `src/renderer/ui/icons.tsx` rather than pulled from a
+package or a CDN: CLAUDE.md §1 forbids runtime prerequisites, and the portable zip
+must not depend on the network. No Lucide code ships — only the SVG path data.
+
+```
+ISC License
+
+Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of
+Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors
+2022.
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+```
+
+## Application icon
+
+`build/icon.png` was supplied by the project owner and is not third-party
+software. It is not covered by the notices above.
+
 ## Bundled npm packages
 
 Compiled into the application bundle:

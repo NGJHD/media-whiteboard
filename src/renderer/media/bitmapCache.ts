@@ -48,7 +48,26 @@ export function peek(cacheKey: string, index: number): ImageBitmap | null {
   const entry = entries.get(key);
   if (!entry) return null;
   touch(key, entry);
+  lastDrawn.set(cacheKey, entry.bitmap);
   return entry.bitmap;
+}
+
+/**
+ * The most recent frame each layer actually drew.
+ *
+ * A media node with no bitmap draws nothing at all, which is why a freshly
+ * dropped file showed only its selection handles, and why a layer blinks out if
+ * the preview outruns the decoder. Holding the last frame is strictly better
+ * than a hole: while a background decode is still running (§7) that is frame 0,
+ * and mid-playback it is the frame before this one.
+ *
+ * Export never reaches this path — §12 prefetches every frame it needs before
+ * the synchronous `stage.draw()` — so output pixels are unaffected.
+ */
+const lastDrawn = new Map<string, ImageBitmap>();
+
+export function peekOrLast(cacheKey: string, index: number): ImageBitmap | null {
+  return peek(cacheKey, index) ?? lastDrawn.get(cacheKey) ?? null;
 }
 
 export async function load(cacheKey: string, index: number): Promise<ImageBitmap | null> {
@@ -94,6 +113,7 @@ export async function prefetch(cacheKey: string, indices: number[]): Promise<voi
 }
 
 export function evictEntry(cacheKey: string): void {
+  lastDrawn.delete(cacheKey);
   for (const [key, entry] of [...entries]) {
     if (!key.startsWith(`${cacheKey}:`)) continue;
     entry.bitmap.close();
@@ -109,5 +129,6 @@ export function stats(): { bytes: number; frames: number; budget: number } {
 export function clear(): void {
   for (const entry of entries.values()) entry.bitmap.close();
   entries.clear();
+  lastDrawn.clear();
   totalBytes = 0;
 }

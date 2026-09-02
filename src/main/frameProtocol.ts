@@ -1,7 +1,9 @@
 import { protocol, net } from 'electron';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { FRAME_SCHEME } from '../shared/ipc';
+import { firstFramePath } from './media';
 
 /**
  * Serves decoded cache frames to the renderer over a custom scheme (§7).
@@ -30,8 +32,40 @@ export function registerFrameScheme(): void {
   ]);
 }
 
+const MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+};
+
+/**
+ * Cached entry extension per cache key.
+ *
+ * A cached frame is `.png` for anything decoded, or the source's own container
+ * for a static image that was copied in rather than transcoded (§7). Rather than
+ * carry that into the URL — and therefore into `MediaObject` and every saved
+ * project — the extension is read off the published directory once and
+ * remembered. Only successful resolutions are cached: an entry that is still
+ * decoding has no directory yet, and must be looked at again once it does.
+ */
+const entryExtensions = new Map<string, string>();
+
+async function resolveExtension(dir: string): Promise<string | null> {
+  const names = await fsp.readdir(dir).catch(() => null);
+  if (!names) return null;
+  const first = names.find((n) => n.startsWith('000001.'));
+  return first ? path.extname(first).toLowerCase() : null;
+}
+
+export function forgetFrameExtension(cacheKey: string): void {
+  entryExtensions.delete(cacheKey);
+}
+
 export function serveFrames(getCacheDir: () => string): void {
-  protocol.handle(FRAME_SCHEME, (request) => {
+  protocol.handle(FRAME_SCHEME, async (request) => {
     const url = new URL(request.url);
     // mwframe://frame/<cacheKey>/<index>
     const [cacheKey, rawIndex] = url.pathname.replace(/^\//, '').split('/');
@@ -43,21 +77,53 @@ export function serveFrames(getCacheDir: () => string): void {
       return new Response('bad request', { status: 400 });
     }
 
-    const file = path.join(getCacheDir(), cacheKey, `${String(index + 1).padStart(6, '0')}.webp`);
-    return net.fetch(pathToFileURL(file).toString()).then((response) => {
-      if (!response.ok) return new Response('not found', { status: 404 });
-      // corsEnabled means Chromium enforces CORS on this scheme, so the
-      // response has to opt in. The scheme only ever serves this app's own
-      // cache directory, and the handler above rejects any key that is not a
-      // 16-hex cache id, so there is nothing here to protect from the page.
+    const cacheDir = getCacheDir();
+    const dir = path.join(cacheDir, cacheKey);
+    const name = String(index + 1).padStart(6, '0');
+
+    // corsEnabled means Chromium enforces CORS on this scheme, so the response
+    // has to opt in. The scheme only ever serves this app's own cache
+    // directory, and the check above rejects any key that is not a 16-hex cache
+    // id, so there is nothing here to protect from the page.
+    const serve = async (file: string, ext: string): Promise<Response | null> => {
+      const response = await net.fetch(pathToFileURL(file).toString()).catch(() => null);
+      if (!response?.ok) return null;
       return new Response(response.body, {
         status: 200,
         headers: {
-          'Content-Type': 'image/webp',
+          'Content-Type': MIME_TYPES[ext] ?? 'application/octet-stream',
           'Access-Control-Allow-Origin': '*',
           'Cache-Control': 'no-cache',
         },
       });
-    });
+    };
+
+    const known = entryExtensions.get(cacheKey);
+    if (known) {
+      const hit = await serve(path.join(dir, `${name}${known}`), known);
+      if (hit) return hit;
+      entryExtensions.delete(cacheKey);
+    }
+
+    const ext = await resolveExtension(dir);
+    if (ext) {
+      entryExtensions.set(cacheKey, ext);
+      const hit = await serve(path.join(dir, `${name}${ext}`), ext);
+      if (hit) return hit;
+    }
+
+    // §7 phase one: until the background decode publishes its directory, the
+    // only frame on disk is the standalone first frame. Serving it here is what
+    // lets a 30 s video appear on the canvas the moment it is dropped.
+    if (index === 0) {
+      const first = firstFramePath(cacheDir, cacheKey);
+      const hit = await serve(first, path.extname(first));
+      if (hit) return hit;
+    }
+
+    // A frame that is not decoded yet is an ordinary state, not an error: the
+    // preview loop asks for frames ahead of the decoder and draws nothing until
+    // they land.
+    return new Response('not found', { status: 404 });
   });
 }

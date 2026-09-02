@@ -1,5 +1,6 @@
 import type { Rect } from '../../shared/doc';
 import { MAX_CANVAS_DIMENSION, clampRectToWorld, objectBounds, unionRect } from '../../shared/doc';
+import { replay } from '../paint/paintBuffer';
 import { useStore } from '../state/store';
 
 /**
@@ -46,4 +47,23 @@ export function trimToFit(): void {
     draft.canvasRect = next;
   });
   useStore.getState().fitToWindow();
+}
+
+/**
+ * §6/§10: wipes the whole paint layer in one undoable step.
+ *
+ * The eraser is a stroke tool, so clearing the layer is a different action, not
+ * a very large eraser — and it has to go through the document rather than the
+ * buffer, or undo would replay strokes that were supposed to be gone.
+ */
+export function clearPaint(): void {
+  const store = useStore.getState();
+  if (store.doc.paint.strokes.length === 0) return;
+
+  store.apply('Clear drawing', (draft) => {
+    draft.paint.strokes = [];
+    draft.paint.dirtyRect = null;
+  });
+  replay(useStore.getState().doc.paint);
+  useStore.getState().bumpRevision();
 }

@@ -30,6 +30,13 @@ export interface InteractionHandle {
   sync(): void;
   guides(): SnapGuide[];
   marquee(): Rect | null;
+  /**
+   * Stage position of an object's proxy — its centre, since `place` puts the
+   * origin there. This is where the transform box and handles actually are, as
+   * opposed to where the document says the object is; the two agreeing is what
+   * §11's snapping requires and what nothing else can observe.
+   */
+  proxyPosition(id: LayerId): { x: number; y: number } | null;
   destroy(): void;
 }
 
@@ -111,6 +118,36 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
     });
   }
 
+  /**
+   * Re-places the nodes taking part in the current gesture from the document.
+   *
+   * A drag is snapped in world space (§11), so the pointer and the snapped
+   * result differ by up to the snap threshold. Konva has already moved the node
+   * to the raw pointer position, and `sync` is suppressed during a gesture, so
+   * without this the object jumps to the guide while the transform handles stay
+   * behind under the cursor. Writing the snapped geometry back keeps the box,
+   * the handles and the object on the same rectangle.
+   */
+  function placeSelected(): void {
+    const { doc, selection } = useStore.getState();
+    for (const id of selection) {
+      const node = proxies.get(id);
+      const obj = doc.objects.find((o) => o.id === id);
+      if (node && obj) place(node, obj);
+    }
+
+    if (selection.length > 1) {
+      const bounds = selectionBounds(doc, selection);
+      if (bounds) {
+        const v = view();
+        groupBox.position({
+          x: bounds.x * v.scale + v.offsetX,
+          y: bounds.y * v.scale + v.offsetY,
+        });
+      }
+    }
+  }
+
   function sync(): void {
     if (suppressSync) return;
     const { doc, selection, tool } = useStore.getState();
@@ -146,6 +183,14 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
   }
 
   function updateTransformer(doc: Doc, selection: LayerId[]): void {
+    // While a text object is being edited in place, its editor is the box on
+    // screen (§10). Leaving the transformer up as well puts two rectangles of
+    // different sizes on top of each other.
+    if (useStore.getState().editingTextId !== null) {
+      transformer.nodes([]);
+      groupBox.visible(false);
+      return;
+    }
     if (useStore.getState().tool !== 'select' || selection.length === 0) {
       transformer.nodes([]);
       groupBox.visible(false);
@@ -275,6 +320,8 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
           clampObjectToWorld(obj);
         }
       });
+
+      placeSelected();
     });
 
     node.on('dragend', endGesture);
@@ -316,15 +363,22 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
         clampObjectToWorld(obj);
       });
 
-      // Konva accumulates scale on the node; the model now owns the size, so the
-      // node is reset and re-placed from the document on the next sync.
-      node.scaleX(1);
-      node.scaleY(1);
-      const obj = useStore.getState().doc.objects.find((o) => o.id === id);
-      if (obj) place(node, obj);
+      // Deliberately *not* resetting node.scale here.
+      //
+      // Konva's Transformer computes each step from the node's live attributes.
+      // Resetting the scale to 1 and re-placing the node mid-gesture moves the
+      // ground under it: the next pointer event is measured against geometry
+      // that has already absorbed the change, so the object lurches between
+      // sizes and the drag reads as a move. The node accumulates scale for the
+      // whole gesture, the model is derived from `start * scale`, and the reset
+      // happens once, on transformend.
     });
 
-    node.on('transformend', endGesture);
+    node.on('transformend', () => {
+      node.scaleX(1);
+      node.scaleY(1);
+      endGesture();
+    });
   }
 
   /* ---------------------------------------------------------------------- */
@@ -361,6 +415,13 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
         clampObjectToWorld(obj);
       }
     });
+
+    // Snap moved the objects; bring the box and its handles along (§11).
+    groupBox.position({
+      x: (base.x + dx) * v.scale + v.offsetX,
+      y: (base.y + dy) * v.scale + v.offsetY,
+    });
+    placeSelected();
   });
 
   groupBox.on('dragend', endGesture);
@@ -415,11 +476,15 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
       }
     });
 
-    groupBox.scaleX(1);
-    groupBox.scaleY(1);
+    // As with a single object: the scale stays on the node for the whole
+    // gesture and is reset once, at the end.
   });
 
-  groupBox.on('transformend', endGesture);
+  groupBox.on('transformend', () => {
+    groupBox.scaleX(1);
+    groupBox.scaleY(1);
+    endGesture();
+  });
 
   /* ---------------------------------------------------------------------- */
   /* World clamping on the handles                                          */
@@ -451,6 +516,10 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
     sync,
     guides: () => guides,
     marquee: () => marqueeRect,
+    proxyPosition(id) {
+      const node = proxies.get(id);
+      return node ? { x: node.x(), y: node.y() } : null;
+    },
     destroy() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKey);

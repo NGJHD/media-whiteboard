@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { applyPatches, enablePatches, produceWithPatches, type Patch } from 'immer';
+import { applyPatches, enablePatches, produce, produceWithPatches, type Patch } from 'immer';
 import type { Doc, LayerId, Rect, SceneObject } from '../../shared/doc';
 import { createEmptyDoc } from '../../shared/doc';
 import { PROJECT_SCHEMA_VERSION, PROJECT_EXTENSION } from '../../shared/ipc';
@@ -26,6 +26,18 @@ interface HistoryEntry {
   inverse: Patch[];
   /** Paint needs a buffer replay after undo/redo; objects do not. */
   touchesPaint: boolean;
+}
+
+/**
+ * One in-flight background decode (§7). The object is already on the canvas;
+ * this drives the non-blocking bar that says the rest of its frames are coming.
+ */
+export interface ImportJob {
+  cacheKey: string;
+  /** File name, for the bar's label. */
+  name: string;
+  readyFrames: number;
+  totalFrames: number;
 }
 
 export interface Toast {
@@ -55,6 +67,8 @@ interface State {
   editingTextId: LayerId | null;
   /** Path of the open project, so Ctrl+S can suggest it again (§13). */
   projectPath: string | null;
+  /** Background decodes still running (§7). Empty when nothing is loading. */
+  imports: ImportJob[];
 
   undoStack: HistoryEntry[];
   redoStack: HistoryEntry[];
@@ -72,6 +86,16 @@ interface State {
   apply(label: string, recipe: (draft: Doc) => void): void;
   /** Merges into the previous entry when the label matches — for drags and sliders. */
   applyMerged(label: string, recipe: (draft: Doc) => void): void;
+  /**
+   * Changes the document **without** an undo entry.
+   *
+   * Only for facts the app discovers about the document rather than edits the
+   * user made: a background decode reporting its true frame count, the output
+   * path seeded at startup. Undoing those would mean reverting to a number that
+   * was never right. It must never move or remove an object — the undo stack's
+   * patches address objects by array index.
+   */
+  mutate(recipe: (draft: Doc) => void): void;
   undo(): void;
   redo(): void;
 
@@ -88,6 +112,10 @@ interface State {
    * document, so nothing else would tell the render loop to look again.
    */
   bumpRevision(): void;
+
+  beginImport(job: ImportJob): void;
+  updateImport(cacheKey: string, readyFrames: number, totalFrames: number): void;
+  endImport(cacheKey: string): void;
 
   toast(kind: Toast['kind'], message: string, detail?: string): void;
   dismissToast(id: number): void;
@@ -116,6 +144,7 @@ export const useStore = create<State>((set, get) => ({
   fonts: [],
   editingTextId: null,
   projectPath: null,
+  imports: [],
   undoStack: [],
   redoStack: [],
   previewFrame: 0,
@@ -158,6 +187,13 @@ export const useStore = create<State>((set, get) => ({
     }
 
     get().apply(label, recipe);
+  },
+
+  mutate(recipe) {
+    const state = get();
+    const next = produce(state.doc, recipe);
+    if (next === state.doc) return;
+    set({ doc: next, revision: state.revision + 1 });
   },
 
   undo() {
@@ -226,12 +262,20 @@ export const useStore = create<State>((set, get) => ({
     set({ viewport, revision: get().revision + 1 });
   },
 
-  /** §4: auto-fit canvasRect into the viewport. */
+  /**
+   * §4: fit canvasRect into the viewport.
+   *
+   * This is the *only* view transform the app has. There is no manual zoom and
+   * no pan, so the Viewport re-runs this whenever canvasRect or the viewport
+   * size changes — a window resize, a W/H edit, a trim, an undo, a project
+   * load. Anything that could leave the canvas mis-framed goes through the same
+   * one place rather than each caller remembering to refit.
+   */
   fitToWindow() {
     const { doc, viewport } = get();
     if (viewport.width === 0 || viewport.height === 0) return;
 
-    const margin = 48;
+    const margin = 40;
     const scale = Math.min(
       (viewport.width - margin) / doc.canvasRect.width,
       (viewport.height - margin) / doc.canvasRect.height,
@@ -256,6 +300,25 @@ export const useStore = create<State>((set, get) => ({
 
   bumpRevision() {
     set({ revision: get().revision + 1 });
+  },
+
+  beginImport(job) {
+    const rest = get().imports.filter((i) => i.cacheKey !== job.cacheKey);
+    set({ imports: [...rest, job] });
+  },
+
+  updateImport(cacheKey, readyFrames, totalFrames) {
+    const imports = get().imports;
+    if (!imports.some((i) => i.cacheKey === cacheKey)) return;
+    set({
+      imports: imports.map((i) =>
+        i.cacheKey === cacheKey ? { ...i, readyFrames, totalFrames } : i,
+      ),
+    });
+  },
+
+  endImport(cacheKey) {
+    set({ imports: get().imports.filter((i) => i.cacheKey !== cacheKey) });
   },
 
   toast(kind, message, detail) {

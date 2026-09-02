@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { Api, EncodeRequest, OutputFormat, ProjectFile } from '../shared/ipc';
+import type {
+  Api,
+  EncodeRequest,
+  MediaProgress,
+  OutputFormat,
+  ProjectFile,
+  Settings,
+} from '../shared/ipc';
 
 /**
  * contextIsolation is on, so the renderer sees only what is listed here.
@@ -31,6 +38,20 @@ const api = {
   // Electron removed File.path; this is the supported replacement.
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   importMedia: (sourcePath: string) => ipcRenderer.invoke('media:import', sourcePath),
+  // A push channel rather than a poll: main knows exactly when ffmpeg has
+  // written another frame, and the renderer has nothing useful to ask for in
+  // between. The unsubscribe keeps the listener off `ipcRenderer` forever.
+  onMediaProgress: (handler: (progress: MediaProgress) => void) => {
+    const listener = (_event: unknown, progress: MediaProgress) => handler(progress);
+    ipcRenderer.on('media:progress', listener);
+    return () => {
+      ipcRenderer.removeListener('media:progress', listener);
+    };
+  },
+  cancelImport: (cacheKey: string) => ipcRenderer.send('media:cancelImport', cacheKey),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (patch: Partial<Settings>) => ipcRenderer.invoke('settings:set', patch),
+  uniqueOutputPath: (candidate: string) => ipcRenderer.invoke('fs:uniqueOutputPath', candidate),
   importClipboardImage: (bytes: number[], mimeType: string) =>
     ipcRenderer.invoke('media:importClipboardImage', bytes, mimeType),
   saveProject: (data: ProjectFile, suggestedPath: string) =>

@@ -60,10 +60,10 @@ console.log('=== shape and text creation (§10) ===');
       const undoEntriesForDrag = s().undoStack.length - undoBefore;
       const drawn = s().doc.objects[s().doc.objects.length - 1];
 
-      // Alt constrains to a square (§10): the longer axis wins.
+      // Shift constrains to a square (§10): the longer axis wins.
       const sq = beginShape({ x: 0, y: 0 }, 'ellipse');
-      sq.move({ x: 150, y: 40 }, { alt: true, shift: false });
-      sq.end({ x: 150, y: 40 }, { alt: true, shift: false });
+      sq.move({ x: 150, y: 40 }, { alt: false, shift: true });
+      sq.end({ x: 150, y: 40 }, { alt: false, shift: true });
       const square = s().doc.objects[s().doc.objects.length - 1];
 
       // A click with no drag must not leave an invisible zero-size object.
@@ -99,8 +99,8 @@ console.log('=== shape and text creation (§10) ===');
     c.check('sized to the drag', r.size, [200, 100]);
     // §9: the tool's options become the defaults for the next object drawn.
     c.check('tool defaults are applied', [r.stroke, r.strokeWidth, r.fill], ['#00ff00', 5, null]);
-    // §10: Alt constrains to a square / perfect circle.
-    c.check('Alt constrains to a square', r.squareSize, [150, 150]);
+    // §10: Shift constrains to a square / perfect circle.
+    c.check('Shift constrains to a square', r.squareSize, [150, 150]);
     c.check('ellipse kind is kept', r.squareKind, 'ellipse');
     c.check('the whole drag is one undo entry', r.undoEntriesForDrag, 1);
     c.check('a click without a drag creates nothing', r.countAfterTap, r.countBefore);

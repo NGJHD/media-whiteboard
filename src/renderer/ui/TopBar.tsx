@@ -1,27 +1,65 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { MAX_CANVAS_DIMENSION, WORLD_MAX, WORLD_MIN, clampRectToWorld } from '../../shared/doc';
 import { useStore, type Tool } from '../state/store';
-import { OptionsRow } from './OptionsRow';
+import { hasOptions, OptionsRow } from './OptionsRow';
 import { trimToFit } from '../actions/canvasActions';
-
-const TOOLS: Array<{ id: Tool; label: string; hint: string }> = [
-  { id: 'select', label: 'Select', hint: 'V' },
-  { id: 'brush', label: 'Brush', hint: 'B' },
-  { id: 'eraser', label: 'Eraser', hint: 'E' },
-  { id: 'text', label: 'Text', hint: 'T' },
-  { id: 'rect', label: 'Rect', hint: 'R' },
-  { id: 'ellipse', label: 'Ellipse', hint: 'O' },
-];
+import {
+  IconAddMedia,
+  IconBrush,
+  IconEllipse,
+  IconEraser,
+  IconInfo,
+  IconRect,
+  IconRedo,
+  IconSelect,
+  IconText,
+  IconUndo,
+} from './icons';
 
 /**
- * §9 top bar: canvas size, trim to fit, background, the tool row, and the
- * options row.
+ * §9 top bar — one row, left to right:
+ *
+ *   canvas settings | tools (Select, Undo/Redo, Brush, Eraser, Text, Rect,
+ *   Ellipse) | the active tool's options | About
+ *
+ * The options section is the only part that scrolls. Everything to its left is
+ * fixed-width and always reachable, so the controls the user aims for do not
+ * move when they switch tools.
  */
+
+interface ToolButton {
+  id: Tool;
+  label: string;
+  hint: string;
+  icon: ReactNode;
+}
+
+const BEFORE_UNDO: ToolButton[] = [
+  { id: 'select', label: 'Select', hint: 'V', icon: <IconSelect /> },
+];
+
+const AFTER_UNDO: ToolButton[] = [
+  { id: 'brush', label: 'Brush', hint: 'B', icon: <IconBrush /> },
+  { id: 'eraser', label: 'Eraser', hint: 'E', icon: <IconEraser /> },
+  { id: 'text', label: 'Text', hint: 'T', icon: <IconText /> },
+  { id: 'rect', label: 'Rectangle', hint: 'R', icon: <IconRect /> },
+  { id: 'ellipse', label: 'Ellipse', hint: 'O', icon: <IconEllipse /> },
+];
+
 export function TopBar({ onAbout }: { onAbout(): void }) {
   const doc = useStore((s) => s.doc);
   const tool = useStore((s) => s.tool);
   const setTool = useStore((s) => s.setTool);
   const apply = useStore((s) => s.apply);
+  const undo = useStore((s) => s.undo);
+  const redo = useStore((s) => s.redo);
+  const canUndo = useStore((s) => s.undoStack.length > 0);
+  const canRedo = useStore((s) => s.redoStack.length > 0);
+  const selection = useStore((s) => s.selection);
+  const showOptions = hasOptions(
+    tool,
+    doc.objects.filter((o) => selection.includes(o.id)),
+  );
 
   // Local text state so a partially typed number does not resize the canvas on
   // every keystroke. Committed on blur or Enter.
@@ -59,9 +97,26 @@ export function TopBar({ onAbout }: { onAbout(): void }) {
     }
 
     setError(null);
+    // The viewport refits itself from the new canvasRect (§4) — there is no
+    // other view state to keep in step.
     apply('Resize canvas', (draft) => {
       draft.canvasRect = clampRectToWorld(next);
     });
+  }
+
+  function toolButton(t: ToolButton) {
+    return (
+      <button
+        key={t.id}
+        className={tool === t.id ? 'iconbtn active' : 'iconbtn'}
+        onClick={() => setTool(t.id)}
+        title={`${t.label} (${t.hint})`}
+        aria-label={t.label}
+        aria-pressed={tool === t.id}
+      >
+        {t.icon}
+      </button>
+    );
   }
 
   return (
@@ -70,6 +125,7 @@ export function TopBar({ onAbout }: { onAbout(): void }) {
         <label className="field">
           W
           <input
+            className="dim"
             value={width}
             onChange={(e) => setWidth(e.target.value)}
             onBlur={commitSize}
@@ -80,6 +136,7 @@ export function TopBar({ onAbout }: { onAbout(): void }) {
         <label className="field">
           H
           <input
+            className="dim"
             value={height}
             onChange={(e) => setHeight(e.target.value)}
             onBlur={commitSize}
@@ -88,7 +145,9 @@ export function TopBar({ onAbout }: { onAbout(): void }) {
           />
         </label>
 
-        <button onClick={() => trimToFit()}>Trim to fit</button>
+        <button onClick={() => trimToFit()} title="Shrink or grow the canvas to the exact bounds of the content">
+          Trim to fit
+        </button>
 
         <label className="checkbox">
           <input
@@ -107,6 +166,7 @@ export function TopBar({ onAbout }: { onAbout(): void }) {
         <input
           type="color"
           className="swatch"
+          title="Background colour"
           value={doc.background.color}
           disabled={doc.background.transparent}
           onChange={(e) => {
@@ -118,7 +178,9 @@ export function TopBar({ onAbout }: { onAbout(): void }) {
         />
 
         <button
-          className="ghost"
+          className="iconbtn"
+          title="Add media…"
+          aria-label="Add media"
           onClick={() => {
             void window.api.openMediaDialog().then(async (paths) => {
               if (paths.length === 0) return;
@@ -131,30 +193,44 @@ export function TopBar({ onAbout }: { onAbout(): void }) {
             });
           }}
         >
-          Add media…
+          <IconAddMedia />
         </button>
+
+        <span className="divider" />
+
+        {BEFORE_UNDO.map(toolButton)}
+
+        <button
+          className="iconbtn"
+          title="Undo (Ctrl+Z)"
+          aria-label="Undo"
+          disabled={!canUndo}
+          onClick={() => undo()}
+        >
+          <IconUndo />
+        </button>
+        <button
+          className="iconbtn"
+          title="Redo (Ctrl+Shift+Z)"
+          aria-label="Redo"
+          disabled={!canRedo}
+          onClick={() => redo()}
+        >
+          <IconRedo />
+        </button>
+
+        {AFTER_UNDO.map(toolButton)}
+
+        {showOptions ? <span className="divider" /> : null}
+
+        <OptionsRow />
 
         {error ? <span className="inline-error">{error}</span> : null}
 
-        <button className="ghost about-button" onClick={onAbout} title="About and cache settings">
-          About
+        <button className="iconbtn ghost about-button" onClick={onAbout} title="About, cache and licences">
+          <IconInfo />
         </button>
       </div>
-
-      <div className="topbar-row tools">
-        {TOOLS.map((t) => (
-          <button
-            key={t.id}
-            className={tool === t.id ? 'tool active' : 'tool'}
-            onClick={() => setTool(t.id)}
-            title={`${t.label} (${t.hint})`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      <OptionsRow />
     </header>
   );
 }

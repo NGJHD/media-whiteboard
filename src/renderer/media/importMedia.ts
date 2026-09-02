@@ -16,6 +16,11 @@ function newId(): string {
   return crypto.randomUUID();
 }
 
+/** Windows and POSIX separators both appear here; only the last segment matters. */
+function baseName(sourcePath: string): string {
+  return sourcePath.split(/[\/]/).pop() ?? sourcePath;
+}
+
 export interface DropPoint {
   /** World coordinates. */
   x: number;
@@ -25,8 +30,20 @@ export interface DropPoint {
 /**
  * Turns decoded metadata into a placed object. Shared by file drops and by
  * clipboard pastes (§11), so both follow the same §7 placement rules.
+ *
+ * Resolves null when the first frame cannot be decoded, and adds nothing in that
+ * case. A static source is copied into the cache rather than transcoded (§7), so
+ * the renderer is the first thing to actually look at those bytes — better to
+ * find out here, where it is one toast and no layer, than to place an object
+ * that silently draws nothing.
  */
-export function importMetaAsObject(meta: MediaMeta, at: DropPoint, offset = 0): MediaObject {
+export async function importMetaAsObject(
+  meta: MediaMeta,
+  at: DropPoint,
+  offset = 0,
+): Promise<MediaObject | null> {
+  if (!(await load(meta.cacheKey, 0))) return null;
+
   const store = useStore.getState();
   const { canvasRect } = store.doc;
 
@@ -69,9 +86,17 @@ export function importMetaAsObject(meta: MediaMeta, at: DropPoint, offset = 0): 
   });
   useStore.getState().setSelection([object.id]);
 
-  // Decode the first frame so something appears immediately; the preview loop
-  // pulls the rest in as it cycles.
-  void load(meta.cacheKey, 0);
+  // §7: main resolves as soon as frame one exists, so an animated source lands
+  // here mid-decode. Register a job for it and the non-blocking bar under the
+  // canvas reports the rest of the frames arriving.
+  if (!meta.complete) {
+    useStore.getState().beginImport({
+      cacheKey: meta.cacheKey,
+      name: baseName(meta.sourcePath),
+      readyFrames: meta.readyFrames,
+      totalFrames: meta.frameCount,
+    });
+  }
 
   return object;
 }
@@ -79,6 +104,10 @@ export function importMetaAsObject(meta: MediaMeta, at: DropPoint, offset = 0): 
 export async function importFiles(paths: string[], at: DropPoint): Promise<void> {
   const store = useStore.getState();
   const failures: string[] = [];
+
+  // Feedback item 18: a drop always lands you back on Select, so the new object
+  // can be moved straight away rather than being drawn over.
+  store.setTool('select');
 
   // Stagger multiple drops so they do not land exactly on top of each other.
   let offset = 0;
@@ -91,7 +120,13 @@ export async function importFiles(paths: string[], at: DropPoint): Promise<void>
       continue;
     }
 
-    importMetaAsObject(result.meta, at, offset);
+    if (!(await importMetaAsObject(result.meta, at, offset))) {
+      // The frame is on disk but the renderer could not decode it. Do not leave
+      // the background decode running for a layer that was never added.
+      window.api.cancelImport(result.meta.cacheKey);
+      failures.push(`${baseName(sourcePath)}: could not decode this file.`);
+      continue;
+    }
     offset += 24;
   }
 

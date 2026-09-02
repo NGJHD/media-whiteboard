@@ -46,6 +46,8 @@ export interface OverlayState {
   selection: string[];
   snapGuides?: SnapGuide[];
   marquee?: Rect | null;
+  /** Suppressed from the selection outline: its editor is the box (§10). */
+  editingTextId?: string | null;
 }
 
 function toScreen(view: ViewTransform, rect: Rect): Rect {
@@ -115,7 +117,9 @@ export function drawOverlay(layer: Konva.Layer, state: OverlayState): void {
   );
 
   // 4. Selection outlines and handles.
-  const selected = doc.objects.filter((o) => selection.includes(o.id));
+  const selected = doc.objects.filter(
+    (o) => selection.includes(o.id) && o.id !== state.editingTextId,
+  );
   for (const obj of selected) {
     const bounds = toScreen(view, objectBounds(obj));
     layer.add(

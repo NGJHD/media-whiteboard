@@ -16,12 +16,15 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.renderer.json",
     "smoke:export": "node scripts/smoke-export.mjs",
     "smoke:import": "node scripts/smoke-import.mjs",
-    "smoke": "npm run smoke:export && npm run smoke:import && npm run smoke:scene && npm run smoke:select && npm run smoke:timing && npm run smoke:tools",
+    "smoke": "npm run smoke:export && npm run smoke:import && npm run smoke:scene && npm run smoke:select && npm run smoke:timing && npm run smoke:tools && npm run smoke:transform && npm run smoke:preview",
     "smoke:scene": "node scripts/smoke-scene.mjs",
     "preview": "node scripts/preview-app.mjs",
     "smoke:select": "node scripts/smoke-select.mjs",
     "smoke:timing": "node scripts/smoke-timing.mjs",
-    "smoke:tools": "node scripts/smoke-tools.mjs"
+    "smoke:tools": "node scripts/smoke-tools.mjs",
+    "smoke:transform": "node scripts/smoke-transform.mjs",
+    "smoke:preview": "node scripts/smoke-preview.mjs",
+    "screenshot": "node scripts/screenshot.mjs"
   },
   "dependencies": {},
   "devDependencies": {

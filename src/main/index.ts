@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, Menu, dialog, ipcMain, shell, type WebContents } from 'electron';
 import { execFile } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -10,23 +10,29 @@ import {
   type CacheInfo,
   type FfmpegInfo,
   type ImportResult,
+  type MediaProgress,
   type OutputFormat,
   type ProjectFile,
   type ProjectLoadResult,
+  type Settings,
 } from '../shared/ipc';
 import { registerExportHandler } from './export';
 import { binaries } from './ffmpeg';
-import { registerFrameScheme, serveFrames } from './frameProtocol';
+import { forgetFrameExtension, registerFrameScheme, serveFrames } from './frameProtocol';
 import {
   ACCEPTED_EXTENSIONS,
   CACHE_LIMIT_BYTES,
   clearCache,
   evictCache,
+  cancelDecode,
   importClipboardImage,
   importMedia,
   listCache,
+  stopDecodes,
+  sweepPartials,
 } from './media';
 import { applyPaths, resolvePaths } from './paths';
+import { getSettings, initSettings, patchSettings, uniquePath } from './settings';
 
 const execFileAsync = promisify(execFile);
 
@@ -40,6 +46,7 @@ const distDir = __dirname;
 // write to %APPDATA%, which §1 forbids.
 const paths = resolvePaths(isDev, distDir);
 applyPaths(paths);
+initSettings(paths.userData);
 
 // The app has its own top bar (§9). The stock File/Edit/View menu is not part of it.
 Menu.setApplicationMenu(null);
@@ -48,11 +55,22 @@ Menu.setApplicationMenu(null);
 registerFrameScheme();
 
 function createWindow(): void {
+  // MW_SMOKE_SIZE lets a smoke run open the window at the §9 minimum, which is
+  // the size the single-row top bar has to survive.
+  const size = (process.env.MW_SMOKE_SIZE ?? '').split('x').map(Number);
+  const smokeWidth = size[0] ?? 0;
+  const smokeHeight = size[1] ?? 0;
+
   const win = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 940,
-    minHeight: 600,
+    width: smokeWidth > 0 ? smokeWidth : 1600,
+    height: smokeHeight > 0 ? smokeHeight : 1000,
+    // The single-row top bar (§9) is laid out for this width; below it the
+    // options strip would scroll permanently.
+    minWidth: 1280,
+    minHeight: 720,
+    // Packaged, the icon is compiled into the exe by electron-builder; in dev
+    // there is no exe, so point the window at the source PNG.
+    ...(isDev ? { icon: path.join(distDir, '..', '..', 'build', 'icon.png') } : {}),
     backgroundColor: '#1b1d21',
     show: false,
     webPreferences: {
@@ -120,7 +138,10 @@ ipcMain.handle(
           : { name: 'Animated GIF', extensions: ['gif'] },
       ],
     });
-    return result.canceled || !result.filePath ? null : result.filePath;
+    if (result.canceled || !result.filePath) return null;
+    // Feedback item 22: the next launch starts in the folder used last.
+    patchSettings({ lastOutputDir: path.dirname(result.filePath) });
+    return result.filePath;
   },
 );
 
@@ -154,17 +175,44 @@ ipcMain.handle('dialog:confirmOverwrite', async (_e, filePath: string): Promise<
 
 registerExportHandler(() => paths.cacheDir);
 
-ipcMain.handle('media:import', (_e, sourcePath: string): Promise<ImportResult> =>
-  importMedia({ cacheDir: paths.cacheDir, sourcePath }),
+/**
+ * §7: resolves as soon as the first frame exists. The rest of the decode reports
+ * itself over `media:progress`, addressed to whichever window asked for it.
+ */
+ipcMain.handle('media:import', (event, sourcePath: string): Promise<ImportResult> =>
+  importMedia({
+    cacheDir: paths.cacheDir,
+    sourcePath,
+    onProgress: (progress) => sendProgress(event.sender, progress),
+  }),
 );
 
+function sendProgress(sender: WebContents, progress: MediaProgress): void {
+  if (sender.isDestroyed()) return;
+  sender.send('media:progress', progress);
+}
+
 ipcMain.handle('media:openDialog', async (): Promise<string[]> => {
+  const lastDir = getSettings().lastMediaDir;
   const result = await dialog.showOpenDialog({
+    // Feedback item 23: reopen where the user last picked media from.
+    ...(lastDir ? { defaultPath: lastDir } : {}),
     properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'Media', extensions: ACCEPTED_EXTENSIONS.map((e) => e.slice(1)) }],
   });
-  return result.canceled ? [] : result.filePaths;
+  if (result.canceled || result.filePaths.length === 0) return [];
+  patchSettings({ lastMediaDir: path.dirname(result.filePaths[0]!) });
+  return result.filePaths;
 });
+
+ipcMain.on('media:cancelImport', (_e, cacheKey: string) => {
+  if (!/^[a-f0-9]{16}$/.test(cacheKey)) return;
+  void cancelDecode(paths.cacheDir, cacheKey).then(() => forgetFrameExtension(cacheKey));
+});
+
+ipcMain.handle('settings:get', (): Settings => getSettings());
+ipcMain.handle('settings:set', (_e, patch: Partial<Settings>): Settings => patchSettings(patch));
+ipcMain.handle('fs:uniqueOutputPath', (_e, candidate: string): string => uniquePath(candidate));
 
 async function cacheInfo(): Promise<CacheInfo> {
   const entries = await listCache(paths.cacheDir);
@@ -178,8 +226,10 @@ async function cacheInfo(): Promise<CacheInfo> {
 
 ipcMain.handle(
   'media:importClipboardImage',
-  (_e, bytes: number[], mimeType: string): Promise<ImportResult> =>
-    importClipboardImage(paths.cacheDir, Buffer.from(bytes), mimeType),
+  (event, bytes: number[], mimeType: string): Promise<ImportResult> =>
+    importClipboardImage(paths.cacheDir, Buffer.from(bytes), mimeType, (progress) =>
+      sendProgress(event.sender, progress),
+    ),
 );
 
 /* -- Project files (§13) --------------------------------------------------- */
@@ -285,6 +335,20 @@ async function runSmoke(): Promise<void> {
     await new Promise<void>((resolve) => win.webContents.once('did-finish-load', () => resolve()));
   }
 
+  // MW_SMOKE_SHOT captures the window once the expression has settled. Layout
+  // is the one thing an assertion cannot check for you, and a screenshot from
+  // the real window is cheaper than describing what it should look like.
+  const shotPath = process.env.MW_SMOKE_SHOT;
+  const capture = async () => {
+    if (!shotPath) return;
+    try {
+      const image = await win.webContents.capturePage();
+      writeFileSync(shotPath, image.toPNG());
+    } catch {
+      // A capture failure must not fail the run it was only observing.
+    }
+  };
+
   try {
     const result = await win.webContents.executeJavaScript(
       `Promise.resolve().then(() => (${spec})).then(
@@ -293,9 +357,11 @@ async function runSmoke(): Promise<void> {
        )`,
     );
     clearTimeout(guard);
+    await capture();
     report(JSON.parse(result));
   } catch (err) {
     clearTimeout(guard);
+    await capture();
     report({ ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
@@ -315,7 +381,9 @@ if (!app.requestSingleInstanceLock()) {
 
   void app.whenReady().then(async () => {
     serveFrames(() => paths.cacheDir);
-    // §7: LRU-evict on startup, before anything can add to the cache.
+    // §7: tidy up after any decode that was killed, then LRU-evict, both before
+    // anything can add to the cache.
+    await sweepPartials(paths.cacheDir).catch(() => {});
     await evictCache(paths.cacheDir).catch(() => 0);
     createWindow();
     if (process.env.MW_SMOKE) void runSmoke();
@@ -324,5 +392,8 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 
+  // A background decode outliving the window would keep writing into the cache
+  // of an app that is gone.
+  app.on('before-quit', stopDecodes);
   app.on('window-all-closed', () => app.quit());
 }

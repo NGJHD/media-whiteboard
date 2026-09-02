@@ -31,14 +31,14 @@ export const useToolDefaults = create<ToolDefaults>((set) => ({
   brushSize: 8,
   eraserSize: 24,
 
-  stroke: '#ffffff',
+  stroke: '#ff3b30',
   strokeWidth: 3,
   fill: null,
 
   fontFamily: 'Segoe UI',
   fontSize: 48,
   fontStyle: 'normal',
-  textColor: '#ffffff',
+  textColor: '#ff3b30',
   outline: null,
   shadow: null,
 

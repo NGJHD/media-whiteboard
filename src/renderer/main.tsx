@@ -14,6 +14,18 @@ if (import.meta.env.DEV) {
     __mwProbe: encodeGradient,
     __mwStore: useStore,
     __mwExport: exportDocument,
+    // Waits for every background decode to finish (§7). Import no longer blocks
+    // on the full decode, so a test that inspects the disk cache has to say so.
+    __mwIdle: (timeoutMs = 90_000) =>
+      new Promise<boolean>((resolve) => {
+        const startedAt = Date.now();
+        const check = () => {
+          if (useStore.getState().imports.length === 0) return resolve(true);
+          if (Date.now() - startedAt > timeoutMs) return resolve(false);
+          setTimeout(check, 50);
+        };
+        check();
+      }),
   });
 }
 

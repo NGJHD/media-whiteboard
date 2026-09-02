@@ -6,9 +6,10 @@
  * refused without adding a layer, and a second import of the same file is a
  * cache hit rather than a re-decode.
  */
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeChecker, startHarness } from './smoke-lib.mjs';
+import { makeChecker, startHarness, workDir } from './smoke-lib.mjs';
 import { root } from './esbuild.config.mjs';
 
 const fixtures = path.join(root, 'test-fixtures');
@@ -26,6 +27,7 @@ console.log('\n=== static PNG ===');
       const store = window.__mwStore;
       const { importFiles } = await import('/media/importMedia.ts');
       await importFiles(['${f('static.png')}'], { x: 0, y: 0 });
+      await window.__mwIdle();
       const s = store.getState();
       const obj = s.doc.objects[0];
       return {
@@ -71,6 +73,7 @@ console.log('\n=== animated GIF (10 fps, 2 s) ===');
       const { importFiles } = await import('/media/importMedia.ts');
       const timing = await import('/scene/timing.ts');
       await importFiles(['${f('anim-10fps-2s.gif')}'], { x: 0, y: 0 });
+      await window.__mwIdle();
       const s = store.getState();
       const obj = s.doc.objects[0];
       const plan = timing.planLoop(s.doc);
@@ -113,6 +116,7 @@ console.log('=== two layers, LCM loop (§8.1) ===');
       const { importFiles } = await import('/media/importMedia.ts');
       const timing = await import('/scene/timing.ts');
       await importFiles(['${f('anim-10fps-2s.gif')}', '${f('anim-10fps-1s.gif')}'], { x: 0, y: 0 });
+      await window.__mwIdle();
       const s = store.getState();
       const plan = timing.planLoop(s.doc);
       return {
@@ -150,6 +154,7 @@ console.log('=== mismatched rates, cap rule (§8.1) ===');
       const { importFiles } = await import('/media/importMedia.ts');
       const timing = await import('/scene/timing.ts');
       await importFiles(['${f('anim-10fps-2s.gif')}', '${f('anim-25fps-1.5s.webm')}'], { x: 0, y: 0 });
+      await window.__mwIdle();
       const s = store.getState();
       const plan = timing.planLoop(s.doc);
       return {
@@ -232,7 +237,14 @@ console.log('\n=== rejections (§7, §14) ===');
 
 console.log('\n=== disk cache (§7) ===');
 {
-  const info = await harness.run(`window.api.getCacheInfo().then(i => ({ ok: true, ...i }))`);
+  const info = await harness.run(`
+    (async () => {
+      const { importFiles } = await import('/media/importMedia.ts');
+      await importFiles(['${f('anim-10fps-2s.gif')}'], { x: 0, y: 0 });
+      await window.__mwIdle();
+      return { ok: true, ...(await window.api.getCacheInfo()) };
+    })()
+  `);
   if (!info.ok) {
     c.fail(`cache info failed: ${info.error}`);
   } else {
@@ -246,15 +258,17 @@ console.log('\n=== disk cache (§7) ===');
     const withMeta = keys.filter((k) => fs.existsSync(path.join(dir, k, 'meta.json')));
     c.check('every entry has meta.json', withMeta.length, keys.length);
 
-    // Frames must be lossless WebP, numbered from 000001.
+    // Frames are lossless and numbered from 000001. The extension is whatever
+    // §7 chose for this entry: PNG for a decode, the source's own container for
+    // a static image that was copied in rather than transcoded.
     const sample = withMeta[0];
     if (!sample) {
       c.fail('no cache entry to inspect');
     } else {
-    const frames = fs.readdirSync(path.join(dir, sample)).filter((n) => n.endsWith('.webp')).sort();
     const meta = JSON.parse(fs.readFileSync(path.join(dir, sample, 'meta.json'), 'utf8'));
+    const frames = fs.readdirSync(path.join(dir, sample)).filter((n) => n.endsWith(meta.frameExt)).sort();
     c.check('frame files match meta.frameCount', frames.length, meta.frameCount);
-    c.check('frames are 1-based, 6 digits', frames[0], '000001.webp');
+    c.check('frames are 1-based, 6 digits', frames[0], `000001${meta.frameExt}`);
     c.check(
       'frameDurationsMs length matches frameCount',
       meta.frameDurationsMs.length,
@@ -275,6 +289,7 @@ console.log('\n=== cache hit on re-import ===');
       const t1 = performance.now();
       const second = await window.api.importMedia('${f('anim-10fps-2s.gif')}');
       const t2 = performance.now();
+      await window.__mwIdle();
       return {
         ok: true,
         sameKey: first.ok && second.ok && first.meta.cacheKey === second.meta.cacheKey,
@@ -295,6 +310,66 @@ console.log('\n=== cache hit on re-import ===');
       result.secondMs < 250,
       `${result.firstMs} ms then ${result.secondMs} ms`,
     );
+  }
+}
+
+/* -- 7. Deleting the layer stops its decode (§7) --------------------------- */
+
+console.log('');
+console.log('=== deleting a layer cancels its decode (§7) ===');
+{
+  // Generated rather than committed: this has to still be decoding when the
+  // delete lands, and every fixture in the repo finishes instantly.
+  const slow = path.join(workDir, 'slow-decode.avi');
+  if (!fs.existsSync(slow)) {
+    execFileSync(path.join(root, 'resources', 'bin', 'ffmpeg.exe'), [
+      '-y', '-v', 'error',
+      '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=30:duration=10',
+      '-c:v', 'mjpeg', '-q:v', '3',
+      slow,
+    ]);
+  }
+
+  const result = await harness.run(`
+    (async () => {
+      const store = window.__mwStore;
+      const { importFiles } = await import('/media/importMedia.ts');
+      const { deleteSelection } = await import('/actions/objectActions.ts');
+
+      // Deliberately NOT awaiting __mwIdle: the point is to interrupt it.
+      await importFiles([${JSON.stringify(slow)}], { x: 0, y: 0 });
+      const decodingAtStart = store.getState().imports.length;
+
+      // The import leaves the new object selected (§7).
+      deleteSelection();
+      await new Promise((r) => setTimeout(r, 1200));
+
+      const cache = await window.api.getCacheInfo();
+      return {
+        ok: true,
+        decodingAtStart,
+        objects: store.getState().doc.objects.length,
+        stillDecoding: store.getState().imports.length,
+        cacheDir: cache.dir,
+        toasts: store.getState().toasts.map((t) => t.message),
+      };
+    })()
+  `);
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.check('the decode was still running when the layer went', result.decodingAtStart, 1);
+    c.check('the layer is gone', result.objects, 0);
+    c.check('and its progress bar with it', result.stillDecoding, 0);
+    // A cancellation is something the user asked for, not a failure to report.
+    c.check('no error toast', result.toasts, []);
+
+    const leftovers = fs
+      .readdirSync(result.cacheDir)
+      .filter((n) => n.endsWith('.partial') || n.includes('.first.'));
+    c.check('no half-written entry left behind', leftovers, []);
   }
 }
 

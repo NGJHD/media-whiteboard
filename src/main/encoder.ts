@@ -54,6 +54,17 @@ function quality(request: EncodeRequest): string[] {
   return ['-q:v', q];
 }
 
+/**
+ * libwebp advertises bgra, yuv420p and yuva420p, and left alone ffmpeg
+ * negotiates an alpha-carrying format for an rgba input. Stating it explicitly
+ * pins that rather than trusting the negotiation to keep choosing well, and lets
+ * an opaque document drop the alpha plane it does not use — measurably smaller
+ * files for the common case.
+ */
+function webpPixelFormat(request: EncodeRequest): string[] {
+  return ['-pix_fmt', request.transparent ? 'yuva420p' : 'yuv420p'];
+}
+
 function dither(request: EncodeRequest): string {
   return { low: 'none', medium: 'bayer', high: 'sierra2_4a' }[request.quality];
 }
@@ -114,6 +125,7 @@ export class Encoder {
       ...inputArgs(this.request, 'pipe:0'),
       '-c:v', 'libwebp_anim',
       '-loop', '0', // §8: infinite
+      ...webpPixelFormat(this.request),
       ...quality(this.request),
       this.request.outputPath,
     ];
@@ -203,10 +215,14 @@ export class Encoder {
   private async runGifPasses(): Promise<void> {
     const { ffmpeg } = binaries();
 
+    const transparent = this.request.transparent;
+
     this.events.onPhase('palette', 0.8);
     await this.run(ffmpeg, [
       ...inputArgs(this.request, this.scratchPath),
-      '-vf', 'palettegen=reserve_transparent=1',
+      // Reserving a palette slot costs one of the 256 colours, so only do it
+      // when there is transparency to reserve it for.
+      '-vf', `palettegen=reserve_transparent=${transparent ? 1 : 0}`,
       this.palettePath,
     ]);
 
@@ -214,7 +230,11 @@ export class Encoder {
     await this.run(ffmpeg, [
       ...inputArgs(this.request, this.scratchPath),
       '-i', this.palettePath,
-      '-lavfi', `paletteuse=dither=${dither(this.request)}`,
+      // GIF alpha is 1-bit (§12), so a threshold decides where the cut between
+      // transparent and opaque falls. 128 is also paletteuse's default; it is
+      // written out so that changing it is a deliberate edit, and so that the
+      // opaque path can leave it off entirely.
+      '-lavfi', `paletteuse=dither=${dither(this.request)}${transparent ? ':alpha_threshold=128' : ''}`,
       '-loop', '0',
       this.request.outputPath,
     ]);

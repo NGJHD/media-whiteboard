@@ -9,8 +9,15 @@ import { useStore, worldToScreen } from '../state/store';
  * what the user types looks like what will be rendered. Commit on blur or
  * `Ctrl+Enter`; cancel on `Esc`.
  *
- * The Konva text node is hidden while editing, otherwise the two would
- * double-draw on top of each other.
+ * The Konva text node is hidden while editing, and so are the selection outline
+ * and the transform handles — otherwise the editor's own box and the selection
+ * box sit on top of each other at different sizes, which reads as two nested
+ * rectangles rather than one thing being edited.
+ *
+ * The box **grows downward** as lines are added. A textarea that scrolls would
+ * hide what was just typed, and the height is auto-computed from the wrapped
+ * result anyway (§10) — so the editor measures its own content every keystroke
+ * and matches its height to it.
  */
 export function TextEditor() {
   const editingId = useStore((s) => s.editingTextId);
@@ -37,13 +44,31 @@ export function TextEditor() {
     ref.current.select();
   }, [object?.id]);
 
+  // Grow to fit the content. `auto` first, so the box can shrink again when a
+  // line is deleted rather than only ever getting taller.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value, view.scale, object?.fontSize, object?.boxWidth, object?.fontFamily]);
+
   if (!object) return null;
 
-  // §10: height is always auto-computed from the wrapped result, so the editor
-  // measures itself and writes that back rather than imposing a height.
+  /**
+   * §10: height is always auto-computed from the wrapped result, so the editor
+   * measures itself and writes that back rather than imposing a height.
+   *
+   * The **top** edge is what stays put. The model stores a centre, so writing a
+   * taller height without moving the centre would shift the finished text up by
+   * half of whatever was added — it would jump the moment the editor closed,
+   * away from where it was being typed.
+   */
   function commit(next: string) {
     const store = useStore.getState();
-    const height = ref.current?.scrollHeight ?? object!.height;
+    const measured = ref.current?.scrollHeight;
+    const height = measured ? measured / view.scale : object!.height;
+    const top = object!.y - object!.height / 2;
 
     if (next.trim().length === 0) {
       // An empty text object would be invisible and unselectable.
@@ -56,7 +81,8 @@ export function TextEditor() {
         const target = draft.objects.find((o) => o.id === object!.id);
         if (target?.kind !== 'text') return;
         target.text = next;
-        target.height = height / view.scale;
+        target.height = height;
+        target.y = top + height / 2;
       });
     }
     store.setEditingText(null);
@@ -74,6 +100,7 @@ export function TextEditor() {
       className="text-editor"
       value={value}
       spellCheck={false}
+      rows={1}
       onChange={(e) => setValue(e.target.value)}
       onBlur={() => commit(value)}
       onKeyDown={(e) => {

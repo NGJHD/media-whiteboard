@@ -1,7 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   deleteSelection,
-  duplicateSelection,
   hasClipboard,
   pasteClipboard,
   reorderSelection,
@@ -20,18 +19,40 @@ export interface MenuState {
 /**
  * §11 context menu.
  *
- * On an object: Delete · Duplicate · — · Bring to Front / Forward / Backward /
- * to Back · — · Opacity slider · Properties…
+ * On an object: Delete · — · Bring Forward / Send Backward / Bring to Front /
+ * Send to Back — the one-step moves first, because they are the ones reached
+ * for repeatedly.
  *
- * On empty canvas: Paste · Select All · Fit to window.
- *
- * Properties… opens the same controls the options row already shows for a
- * selection (§9), so it exists for discoverability rather than as the only route.
+ * On empty canvas: Paste · Select All. There is no "Fit to window": the canvas
+ * is always fitted (§4), so it would be a no-op.
  */
 export function ContextMenu({ state, onClose }: { state: MenuState; onClose(): void }) {
   const ref = useRef<HTMLDivElement>(null);
   const selection = useStore((s) => s.selection);
   const objects = useStore((s) => s.doc.objects);
+
+  // Flipped into view once the menu has been measured. Until then it is placed
+  // at the cursor and hidden, so a menu opened near the bottom edge is never
+  // painted half off-screen before it moves.
+  const [placement, setPlacement] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const parent = el?.offsetParent as HTMLElement | null;
+    if (!el || !parent) return;
+
+    const margin = 6;
+    const { width, height } = el.getBoundingClientRect();
+    const maxX = parent.clientWidth - width - margin;
+    const maxY = parent.clientHeight - height - margin;
+
+    // Prefer flipping to the other side of the cursor, as a menu should; only
+    // clamp when even the flipped position does not fit.
+    const left = state.x > maxX ? Math.max(margin, state.x - width) : state.x;
+    const top = state.y > maxY ? Math.max(margin, state.y - height) : state.y;
+
+    setPlacement({ left: Math.min(left, Math.max(margin, maxX)), top: Math.min(top, Math.max(margin, maxY)) });
+  }, [state.x, state.y, selection.length, state.onObject]);
 
   useEffect(() => {
     const dismiss = (e: MouseEvent) => {
@@ -48,10 +69,6 @@ export function ContextMenu({ state, onClose }: { state: MenuState; onClose(): v
   }, [onClose]);
 
   const selected = objects.filter((o) => selection.includes(o.id));
-  const sharedOpacity =
-    selected.length > 0 && selected.every((o) => o.opacity === selected[0]!.opacity)
-      ? selected[0]!.opacity
-      : null;
 
   function run(fn: () => void) {
     fn();
@@ -59,45 +76,23 @@ export function ContextMenu({ state, onClose }: { state: MenuState; onClose(): v
   }
 
   return (
-    <div ref={ref} className="context-menu" style={{ left: state.x, top: state.y }}>
+    <div
+      ref={ref}
+      className="context-menu"
+      style={{
+        left: placement?.left ?? state.x,
+        top: placement?.top ?? state.y,
+        visibility: placement ? 'visible' : 'hidden',
+      }}
+    >
       {state.onObject && selected.length > 0 ? (
         <>
           <button onClick={() => run(deleteSelection)}>Delete</button>
-          <button onClick={() => run(duplicateSelection)}>Duplicate</button>
           <hr />
-          <button onClick={() => run(() => reorderSelection('front'))}>Bring to Front</button>
           <button onClick={() => run(() => reorderSelection('forward'))}>Bring Forward</button>
           <button onClick={() => run(() => reorderSelection('backward'))}>Send Backward</button>
+          <button onClick={() => run(() => reorderSelection('front'))}>Bring to Front</button>
           <button onClick={() => run(() => reorderSelection('back'))}>Send to Back</button>
-          <hr />
-          <label className="menu-slider">
-            Opacity
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={sharedOpacity === null ? 100 : Math.round(sharedOpacity * 100)}
-              onChange={(e) => {
-                const value = Number(e.target.value) / 100;
-                useStore.getState().applyMerged('Opacity', (draft) => {
-                  for (const obj of draft.objects) {
-                    if (selection.includes(obj.id)) obj.opacity = value;
-                  }
-                });
-              }}
-            />
-          </label>
-          <button
-            onClick={() =>
-              run(() => {
-                // The options row already shows exactly these controls; make sure
-                // it is the one on screen rather than duplicating them here.
-                useStore.getState().setTool('select');
-              })
-            }
-          >
-            Properties…
-          </button>
         </>
       ) : (
         <>
@@ -105,7 +100,6 @@ export function ContextMenu({ state, onClose }: { state: MenuState; onClose(): v
             Paste
           </button>
           <button onClick={() => run(selectAll)}>Select All</button>
-          <button onClick={() => run(() => useStore.getState().fitToWindow())}>Fit to window</button>
         </>
       )}
     </div>

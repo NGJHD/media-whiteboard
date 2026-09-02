@@ -333,3 +333,189 @@ Recorded here so they are not silently forgotten:
 - ~~**ffmpeg build selection**~~ — resolved in step 2. Pinned in
   `scripts/ffmpeg-build.json`; see D-006 and `THIRD-PARTY-NOTICES.md`.
 - ~~**Zero-copy export frames**~~ — resolved in step 2, negatively. See D-010.
+
+---
+
+## D-019 — Import is two-phase, and the drop waits only for frame one
+
+**Decision**: `media:import` resolves as soon as ffprobe has run and one frame is
+on disk. The rest decodes in a background child process that reports `frame=N`
+over `-progress pipe:1`, and the renderer shows one non-blocking bar per pending
+item inside the canvas area.
+
+**Why**: the drop was blocking on a full transcode. CLAUDE.md §7 never asked for
+that — it asks for the object to be placed — and the wait scaled with the source,
+so a 30 s clip froze the app for as long as it took to decode. Splitting it means
+the cost the user pays at drop time is bounded by one frame regardless of length.
+
+The first frame is written to `<cacheDir>/<key>.first.webp`, beside the entry
+directory rather than inside it, so the atomic `.partial` → published rename is
+untouched and `readMeta` can never mistake a half-finished entry for a complete
+one. The frame protocol serves it for index 0 while the directory does not exist.
+
+`meta.complete` and `readyFrames` are on the wire so the renderer can tell an
+in-progress import from a cache hit without asking again.
+
+---
+
+## D-020 — Per-frame timings only for GIF and animated WebP
+
+**Decision**: `probe` asks ffprobe for `-show_frames` only for `.gif` and
+`.webp`. Video containers get a uniform frame duration from `avg_frame_rate`, and
+their duration from the stream, the container format, or the `DURATION` tag.
+
+**Why**: two things, one correctness and one cost.
+
+The bug: §8.0's "a delay under 20 ms is a malformed GIF delay, treat it as 100 ms"
+rule was being applied to every source. 59.94 fps video has a perfectly legitimate
+16.68 ms frame, so every frame of it was rewritten to 100 ms — a 17 s clip
+measured 102 s and §7 rejected it as too long. Matroska compounded it by carrying
+no per-stream duration, so the only duration available was the one summed from
+those rewritten frames.
+
+The cost: `-show_frames` decodes the entire file. It was the largest single
+component of the drop latency, spent to learn something `avg_frame_rate` already
+says. §8.1 samples by nearest frame at whole output frames, so per-packet jitter
+in a VFR source cannot change which frame is picked — a uniform assumption is not
+just cheaper, it is unobservable.
+
+---
+
+## D-021 — The transform gesture keeps its scale on the node
+
+**Decision**: `transform` handlers derive the model from `gestureStart × node
+scale` and reset the node's scale once, on `transformend`. They do not reset it or
+re-place the node between events.
+
+**Why**: Konva's `Transformer` computes each step from the node's live attributes.
+Resetting the scale to 1 and re-placing the node mid-gesture moves the ground
+under it, so the next pointer event is measured against geometry that has already
+absorbed the change. The visible result was an object that lurched between sizes
+and drifted, so a resize read as a move. `scripts/smoke-transform.mjs` drives the
+real Transformer with a sequence of synthetic pointer events, which is the only
+way to see it — a single event cannot tell the two implementations apart.
+
+A snapped **drag** is the mirror image: there the node has to be written back,
+because snapping moves the object away from the pointer and the handles would
+otherwise stay behind under the cursor.
+
+---
+
+## D-022 — The preview loop redraws once more after the last missing frame
+
+**Decision**: the rAF loop tracks whether its previous draw was made with frames
+still undecoded, and treats that as a reason to draw again.
+
+**Why**: the loop skips a redraw when neither the frame index, the document, nor
+an outstanding decode has moved. A bitmap lands *after* the pass that noticed it
+was missing, so on the next tick nothing has changed and the loop returns —
+leaving the frame that would have shown it undrawn. A dropped image was invisible
+until something else happened to bump the revision, which is why it appeared the
+moment it was nudged.
+
+`peekOrLast` is the other half: a media node with no bitmap draws nothing at all,
+so holding the last frame it drew is strictly better than a hole. Export prefetches
+every frame before its synchronous `stage.draw()`, so neither path is reachable
+there and output pixels are unchanged.
+
+---
+
+## D-023 — The view is always the fit, enforced in the render loop
+
+**Decision**: no zoom, no pan, no "Fit to window". The rAF loop compares
+`canvasRect` and the viewport size against the last values it fitted and refits
+when they differ.
+
+**Why**: CLAUDE.md §4 now says the canvas is always fitted. Calling `fitToWindow`
+from each site that could invalidate it — width/height entry, trim, undo, redo,
+project load, window resize, drop — is a list that is wrong the moment someone
+adds a route to it. Deriving it in the one place that already runs every frame
+makes "always" structural rather than a convention.
+
+---
+
+## D-024 — Settings live outside the document
+
+**Decision**: `lastOutputDir` and `lastMediaDir` are stored in
+`<userData>/settings.json`, read through their own IPC channel, and applied with
+`mutate` rather than `apply`.
+
+**Why**: they belong to this installation, not to a document. Putting them in the
+`Doc` would carry them into `.mwproj` files (§13) and into the undo stack, where
+"undo" would mean reverting a folder the app merely remembered. `mutate` exists
+for exactly this class of change — a fact the app discovered rather than an edit
+the user made — and is documented as never moving or removing an object, because
+the undo stack's Immer patches address objects by array index.
+
+---
+
+## D-025 — Cache frames are PNG, and static sources are not encoded at all
+
+**Decision**: animated sources decode to `%06d.png` at zlib level 1. A static
+source whose container Chromium already decodes (png, jpg, jpeg, bmp, webp, gif)
+is **copied** into the cache entry unchanged. `meta.frameExt` records which.
+
+**Why**: measured, on this machine.
+
+| Source | lossless WebP | PNG (level 1) | copy |
+|---|---|---|---|
+| 40 frames @ 1080x2520 | 38.0 s | 0.9 s | — |
+| trim.mkv, 1020 frames | ~16 min (extrapolated) | 8.4 s | — |
+| 3456x5184 JPEG, one frame | 11.0 s | 1.1 s | ~0 s |
+
+Through the real app, cold cache: a 17 s 1080x2520 clip now appears on the canvas
+in 0.7 s and finishes decoding in 10.7 s; an 18 MP JPEG lands in 0.44 s, where it
+used to take nine seconds to show anything at all.
+
+libwebp's lossless mode is the slowest encoder in the build, and the cache had no
+reason to use it: both formats are lossless, so nothing about output fidelity
+changes. The trade is cache size — roughly 1 GB for that 17 s clip against ~250 MB
+— which the §7 LRU cap already governs, and which is a cache being a cache.
+
+Level 1 rather than 0: level 0 stores raw, quadrupling the entry for no speed
+gain. Level 3 is fractionally smaller and fractionally slower; level 1 is the
+knee.
+
+**The copy matters more than the encoder for stills.** For a single frame the
+only thing an encode buys is a different container, and `createImageBitmap` was
+always going to do the real decoding. The renderer now checks that the first
+frame decodes before the object is placed, so bytes this app has not itself
+produced cannot become a layer that silently draws nothing.
+
+---
+
+## D-026 — The frame protocol resolves the extension, the URL does not carry it
+
+**Decision**: `frameUrl` stays `mwframe://frame/<key>/<index>`. The handler reads
+the entry directory once per key to learn the extension and remembers it,
+forgetting it when a fetch misses or the entry is cancelled.
+
+**Why**: the extension is a property of the cache entry, not of the document.
+Putting it in the URL would mean putting it on `MediaObject`, which means putting
+it in every saved `.mwproj` (§13) — persisting an implementation detail of a
+cache that is explicitly disposable. One `readdir` per key, amortised over every
+frame of that layer, is cheaper than that.
+
+Only successful resolutions are cached: an entry that is still decoding has no
+directory yet and has to be looked at again once it does.
+
+---
+
+## D-027 — Deleting a layer cancels its decode
+
+**Decision**: `media:cancelImport` kills that key's ffmpeg and removes its
+`.partial` directory and phase-one frame. The renderer derives when to call it by
+subscribing to the store and cancelling any import whose `cacheKey` no longer
+appears in the document.
+
+**Why**: a background decode can be tens of seconds of CPU and a gigabyte of
+disk. Spending that on a layer the user has already deleted is pure waste, and
+the partial output would otherwise sit in the cache until eviction.
+
+Derived rather than hooked into `deleteSelection`, for the same reason the fit is
+(D-023): delete, undo, project load and the failed-decode cleanup are all ways an
+object disappears, and that list grows.
+
+A cancellation is not a failure. `CancelledError` is thrown past the reporting
+path so no §14 toast fires — the user asked for it, and the progress bar it
+belonged to is already gone.

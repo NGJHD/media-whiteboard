@@ -38,6 +38,9 @@ export async function exportDocument({ doc, onProgress, signal }: ExportOptions)
     format: doc.format,
     quality: doc.quality,
     outputPath: doc.outputPath,
+    // The encoder pins its pixel format and palette flags from this rather than
+    // leaving them to ffmpeg's negotiation — see the notes in encoder.ts.
+    transparent: doc.background.transparent,
   };
 
   // §12 step 2: text metrics differ if fonts are not settled before frame one.

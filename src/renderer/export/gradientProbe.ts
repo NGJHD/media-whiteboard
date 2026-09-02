@@ -72,6 +72,8 @@ export async function encodeGradient(options: ProbeOptions): Promise<ExportResul
     format,
     quality,
     outputPath,
+    // The probe draws an opaque gradient; it is exercising the pipe, not alpha.
+    transparent: false,
   };
 
   // §12: text metrics differ if fonts are not settled before the first frame.
