@@ -1,0 +1,36 @@
+appId: com.mediawhiteboard.app
+productName: Media Whiteboard
+copyright: MIT
+
+# Portable only. No NSIS, no MSI, no auto-updater, no registry writes. (CLAUDE.md §15)
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - package.json
+
+# ffmpeg.exe / ffprobe.exe land here in step 2. They must exist as real files on
+# disk, so they are extraResources and asar must not swallow them.
+extraResources:
+  - from: resources/bin
+    to: bin
+    filter: ['**/*']
+
+asar: true
+asarUnpack:
+  - resources/bin/**
+
+win:
+  target:
+    - target: dir
+      arch: [x64]
+  executableName: MediaWhiteboard
+  # No code signing: this is an unsigned portable build by design.
+  signAndEditExecutable: true
+
+# electron-builder would otherwise try to rebuild native modules. There are none,
+# and there must never be any. (CLAUDE.md §2)
+npmRebuild: false
+buildDependenciesFromSource: false

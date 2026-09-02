@@ -1,0 +1,19 @@
+node_modules/
+dist/
+release/
+
+# Written by the app itself at runtime (CLAUDE.md §1, DECISIONS.md D-005).
+data/
+cache/
+
+# Fetched at build time by scripts/fetch-ffmpeg.mjs, never committed:
+# ~90 MB each, which would sit in every clone forever.
+resources/bin/*
+!resources/bin/.gitkeep
+
+*.log
+.DS_Store
+Thumbs.db
+
+# tsc --build incremental state
+*.tsbuildinfo

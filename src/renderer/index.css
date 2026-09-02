@@ -1,0 +1,90 @@
+:root {
+  color-scheme: dark;
+  --bg: #1b1d21;
+  --panel: #24272c;
+  --line: #34383f;
+  --text: #e6e8ec;
+  --muted: #9aa1ad;
+  --accent: #6ea8fe;
+  font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  /* The window chrome is the only draggable region; nothing here should select. */
+  user-select: none;
+}
+
+.shell {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+}
+
+.card {
+  width: min(560px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 28px 32px;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.sub {
+  margin: 0 0 24px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 20px;
+  font-size: 13px;
+}
+
+dt { color: var(--muted); }
+
+dd {
+  margin: 0;
+  font-family: 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.step {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.step b { color: var(--accent); font-weight: 600; }
+
+.warn {
+  margin: 20px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #6b5a1f;
+  border-radius: 6px;
+  background: #2c2718;
+  color: #e8d9a4;
+  font-size: 12px;
+}
