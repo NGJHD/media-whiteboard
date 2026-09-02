@@ -218,6 +218,63 @@ measures throughput at a realistic canvas size.
 
 ---
 
+## D-013 — Cache frames are served over a custom scheme
+
+**Decision**: a privileged `mwframe://` scheme serves decoded frames from the
+cache directory. The renderer fetches `mwframe://frame/<cacheKey>/<index>` and
+hands the blob to `createImageBitmap`.
+
+**Why**: the alternative is reading each frame in main and posting the bytes,
+which copies every frame through IPC purely to hand it to the decoder. This way
+Chromium loads the file and the renderer decodes it directly.
+
+Two things this needed that were not obvious:
+
+- **`corsEnabled: true`, plus an `Access-Control-Allow-Origin` header on the
+  response.** The page origin is `http://localhost` in dev and `file://` when
+  packaged, so every frame request is cross-origin. Without this Chromium
+  refuses them all and nothing ever draws — and it fails *silently* as far as the
+  document is concerned, since a missing bitmap simply renders nothing.
+- **Path validation in the handler.** The renderer is not trusted to stay inside
+  the cache directory, so a key that is not exactly 16 hex characters, or a
+  non-integer index, is rejected. Otherwise a key of `../..` reads anything on
+  disk.
+
+---
+
+## D-014 — The preview requests frames; `buildScene` only peeks
+
+**Decision**: `buildScene` reads the bitmap cache synchronously and draws nothing
+for a frame that is not decoded. The preview loop is what notices the gap,
+requests the decode, and keeps redrawing while any frame is outstanding. It also
+decodes ~12 output frames ahead. Export instead prefetches every frame it needs
+*before* drawing.
+
+**Why**: §3 requires `buildScene` to be usable from the synchronous export path,
+where `stage.draw()` cannot await anything. So it cannot load. Something has to,
+and the two callers have genuinely different needs: the preview should show what
+it has and improve, while export must never emit a frame with a missing layer.
+
+This was caught by looking at the running app, not by the tests: a static image
+appeared correctly while an animated layer stayed invisible, because only its
+first frame had been decoded and the preview was cycling through nineteen it had
+never asked for.
+
+---
+
+## D-015 — Cache metadata is versioned
+
+**Decision**: `meta.json` carries `metaVersion`, and an entry whose version does
+not match is treated as a cache miss and re-decoded.
+
+**Why**: §7's cache key covers the *source file* (path, mtime, size), not the
+decoder. When the frame-duration calculation changed, every existing entry kept
+serving metadata computed the old way, and the fix appeared not to work. The key
+cannot cover the decoder without churning the cache on every unrelated change, so
+the version field is the narrower fix.
+
+---
+
 ## Open items
 
 Recorded here so they are not silently forgotten:

@@ -28,6 +28,51 @@ export interface FfmpegInfo {
   error: string | null;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Media import (§7)                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Bumped whenever the meaning of anything in MediaMeta changes, so cache entries
+ * written by an older build are re-decoded instead of silently serving stale
+ * metadata. The cache key covers the *source file*, not the decoder.
+ */
+export const MEDIA_META_VERSION = 2;
+
+/** Written as meta.json beside the decoded frames. */
+export interface MediaMeta {
+  metaVersion: number;
+  cacheKey: string;
+  sourcePath: string;
+  frameCount: number;
+  /** Native timing. Length === frameCount. `[0]` for a static image. */
+  frameDurationsMs: number[];
+  nativeWidth: number;
+  nativeHeight: number;
+}
+
+export type ImportResult =
+  | { ok: true; meta: MediaMeta }
+  | { ok: false; error: string };
+
+export interface CacheInfo {
+  dir: string;
+  bytes: number;
+  entries: number;
+  limitBytes: number;
+}
+
+/**
+ * Frames are served over a custom scheme rather than copied through IPC, so the
+ * renderer can hand a URL straight to `createImageBitmap` without the bytes
+ * crossing the process boundary as a message.
+ */
+export const FRAME_SCHEME = 'mwframe';
+
+export function frameUrl(cacheKey: string, index: number): string {
+  return `${FRAME_SCHEME}://frame/${cacheKey}/${index}`;
+}
+
 export type OutputFormat = 'webp' | 'gif';
 export type Quality = 'low' | 'medium' | 'high';
 
@@ -98,6 +143,12 @@ export interface Api {
    * port in `event.ports[0]`. `openExportChannel` in the renderer pairs the two.
    */
   startExport(request: EncodeRequest): Promise<string>;
+  /** Resolves the OS path of a dropped File (Electron removed File.path). */
+  pathForFile(file: File): string;
+  importMedia(sourcePath: string): Promise<ImportResult>;
+  openMediaDialog(): Promise<string[]>;
+  getCacheInfo(): Promise<CacheInfo>;
+  clearCache(): Promise<CacheInfo>;
   chooseOutputPath(defaultPath: string, format: OutputFormat): Promise<string | null>;
   revealFile(filePath: string): Promise<void>;
 }

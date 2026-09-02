@@ -55,7 +55,7 @@ let failures = 0;
 for (const testCase of CASES) {
   fs.rmSync(testCase.outputPath, { force: true });
 
-  const spec = JSON.stringify({
+  const spec = `window.__mwProbe(${JSON.stringify({
     width: testCase.width,
     height: testCase.height,
     fps: testCase.fps,
@@ -63,7 +63,7 @@ for (const testCase of CASES) {
     format: testCase.format,
     quality: testCase.quality,
     outputPath: testCase.outputPath,
-  });
+  })})`;
 
   process.stdout.write(`\n=== ${testCase.format} ===\n`);
   const result = await runOnce(spec);

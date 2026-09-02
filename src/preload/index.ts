@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { Api, EncodeRequest, OutputFormat } from '../shared/ipc';
 
 /**
@@ -28,6 +28,12 @@ const api = {
   getAppInfo: () => ipcRenderer.invoke('app:getInfo'),
   getFfmpegInfo: () => ipcRenderer.invoke('app:getFfmpegInfo'),
   startExport,
+  // Electron removed File.path; this is the supported replacement.
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
+  importMedia: (sourcePath: string) => ipcRenderer.invoke('media:import', sourcePath),
+  openMediaDialog: () => ipcRenderer.invoke('media:openDialog'),
+  getCacheInfo: () => ipcRenderer.invoke('cache:info'),
+  clearCache: () => ipcRenderer.invoke('cache:clear'),
   chooseOutputPath: (defaultPath: string, format: OutputFormat) =>
     ipcRenderer.invoke('dialog:chooseOutputPath', defaultPath, format),
   revealFile: (filePath: string) => ipcRenderer.invoke('shell:revealFile', filePath),

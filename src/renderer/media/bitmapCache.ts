@@ -1,0 +1,113 @@
+import { frameUrl } from '../../shared/ipc';
+
+/**
+ * In-memory decoded-frame cache (CLAUDE.md §7).
+ *
+ * Budgeted in bytes, not frame count, because a 2560x1440 frame costs 45x what a
+ * 320x180 one does — a count-based cap would either thrash on large media or
+ * blow the budget on small.
+ *
+ * Eviction is least-recently-drawn, so the frames the preview loop is currently
+ * cycling through stay resident.
+ */
+
+const BUDGET_BYTES = 512 * 1024 * 1024;
+
+interface Entry {
+  bitmap: ImageBitmap;
+  bytes: number;
+}
+
+/** Map iteration order is insertion order, which makes it usable as an LRU. */
+const entries = new Map<string, Entry>();
+const inflight = new Map<string, Promise<ImageBitmap | null>>();
+let totalBytes = 0;
+
+function keyFor(cacheKey: string, index: number): string {
+  return `${cacheKey}:${index}`;
+}
+
+function evictTo(limit: number): void {
+  for (const [key, entry] of entries) {
+    if (totalBytes <= limit) return;
+    entry.bitmap.close();
+    entries.delete(key);
+    totalBytes -= entry.bytes;
+  }
+}
+
+/** Marks an entry as most recently used by reinserting it at the tail. */
+function touch(key: string, entry: Entry): void {
+  entries.delete(key);
+  entries.set(key, entry);
+}
+
+/** Synchronous lookup. Returns null if the frame is not decoded yet. */
+export function peek(cacheKey: string, index: number): ImageBitmap | null {
+  const key = keyFor(cacheKey, index);
+  const entry = entries.get(key);
+  if (!entry) return null;
+  touch(key, entry);
+  return entry.bitmap;
+}
+
+export async function load(cacheKey: string, index: number): Promise<ImageBitmap | null> {
+  const key = keyFor(cacheKey, index);
+
+  const existing = entries.get(key);
+  if (existing) {
+    touch(key, existing);
+    return existing.bitmap;
+  }
+
+  const pending = inflight.get(key);
+  if (pending) return pending;
+
+  const promise = (async () => {
+    try {
+      const response = await fetch(frameUrl(cacheKey, index));
+      if (!response.ok) return null;
+      const bitmap = await createImageBitmap(await response.blob());
+
+      const bytes = bitmap.width * bitmap.height * 4;
+      entries.set(key, { bitmap, bytes });
+      totalBytes += bytes;
+      evictTo(BUDGET_BYTES);
+      return bitmap;
+    } catch {
+      return null;
+    } finally {
+      inflight.delete(key);
+    }
+  })();
+
+  inflight.set(key, promise);
+  return promise;
+}
+
+/**
+ * Decodes a run of frames ahead of time. Export needs its bitmap resident before
+ * the synchronous `stage.draw()`, or Konva silently renders a blank node (§3).
+ */
+export async function prefetch(cacheKey: string, indices: number[]): Promise<void> {
+  await Promise.all(indices.map((i) => load(cacheKey, i)));
+}
+
+export function evictEntry(cacheKey: string): void {
+  for (const [key, entry] of [...entries]) {
+    if (!key.startsWith(`${cacheKey}:`)) continue;
+    entry.bitmap.close();
+    entries.delete(key);
+    totalBytes -= entry.bytes;
+  }
+}
+
+export function stats(): { bytes: number; frames: number; budget: number } {
+  return { bytes: totalBytes, frames: entries.size, budget: BUDGET_BYTES };
+}
+
+export function clear(): void {
+  for (const entry of entries.values()) entry.bitmap.close();
+  entries.clear();
+  totalBytes = 0;
+}

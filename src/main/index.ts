@@ -3,9 +3,11 @@ import { execFile } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { AppInfo, FfmpegInfo, OutputFormat } from '../shared/ipc';
+import type { AppInfo, CacheInfo, FfmpegInfo, ImportResult, OutputFormat } from '../shared/ipc';
 import { registerExportHandler } from './export';
 import { binaries } from './ffmpeg';
+import { registerFrameScheme, serveFrames } from './frameProtocol';
+import { CACHE_LIMIT_BYTES, cacheSize, clearCache, evictCache, importMedia, listCache, ACCEPTED_EXTENSIONS } from './media';
 import { applyPaths, resolvePaths } from './paths';
 
 const execFileAsync = promisify(execFile);
@@ -23,6 +25,9 @@ applyPaths(paths);
 
 // The app has its own top bar (§9). The stock File/Edit/View menu is not part of it.
 Menu.setApplicationMenu(null);
+
+// Privileged schemes must be declared before the app is ready.
+registerFrameScheme();
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -107,10 +112,39 @@ ipcMain.handle('shell:revealFile', (_e, filePath: string) => {
 
 registerExportHandler(() => paths.cacheDir);
 
+ipcMain.handle('media:import', (_e, sourcePath: string): Promise<ImportResult> =>
+  importMedia({ cacheDir: paths.cacheDir, sourcePath }),
+);
+
+ipcMain.handle('media:openDialog', async (): Promise<string[]> => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Media', extensions: ACCEPTED_EXTENSIONS.map((e) => e.slice(1)) }],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+
+async function cacheInfo(): Promise<CacheInfo> {
+  const entries = await listCache(paths.cacheDir);
+  return {
+    dir: paths.cacheDir,
+    bytes: entries.reduce((sum, e) => sum + e.bytes, 0),
+    entries: entries.length,
+    limitBytes: CACHE_LIMIT_BYTES,
+  };
+}
+
+ipcMain.handle('cache:info', cacheInfo);
+ipcMain.handle('cache:clear', async (): Promise<CacheInfo> => {
+  await clearCache(paths.cacheDir);
+  return cacheInfo();
+});
+
 /**
- * Drives one real export through the renderer and reports the result, so the
- * export pipe can be tested without simulating UI clicks. Dev builds only —
- * `__mwProbe` does not exist in a packaged renderer.
+ * Evaluates MW_SMOKE as an expression in the renderer and reports what it
+ * resolves to, so any renderer-side flow can be tested without simulating
+ * clicks. Dev builds only — the `__mw*` hooks it calls do not exist in a
+ * packaged renderer.
  *
  * The result goes to a file rather than stdout: an Electron GUI process on
  * Windows does not reliably attach to a parent console, so a piped console.log
@@ -160,7 +194,10 @@ async function runSmoke(): Promise<void> {
 
   try {
     const result = await win.webContents.executeJavaScript(
-      `window.__mwProbe(${spec}).then(r => JSON.stringify(r), e => JSON.stringify({ ok:false, error:String((e && e.message) || e), detail:(e && e.detail) || null }))`,
+      `Promise.resolve().then(() => (${spec})).then(
+         r => JSON.stringify(r ?? { ok: true }),
+         e => JSON.stringify({ ok: false, error: String((e && e.message) || e), detail: (e && e.detail) || null }),
+       )`,
     );
     clearTimeout(guard);
     report(JSON.parse(result));
@@ -183,7 +220,10 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
 
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
+    serveFrames(() => paths.cacheDir);
+    // §7: LRU-evict on startup, before anything can add to the cache.
+    await evictCache(paths.cacheDir).catch(() => 0);
     createWindow();
     if (process.env.MW_SMOKE) void runSmoke();
     app.on('activate', () => {

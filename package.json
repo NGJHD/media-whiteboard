@@ -14,7 +14,11 @@
     "prepackage": "npm run fetch:ffmpeg && npm run build",
     "package": "electron-builder --dir",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.renderer.json",
-    "smoke:export": "node scripts/smoke-export.mjs"
+    "smoke:export": "node scripts/smoke-export.mjs",
+    "smoke:import": "node scripts/smoke-import.mjs",
+    "smoke": "npm run smoke:export && npm run smoke:import && npm run smoke:scene",
+    "smoke:scene": "node scripts/smoke-scene.mjs",
+    "preview": "node scripts/preview-app.mjs"
   },
   "dependencies": {},
   "devDependencies": {
