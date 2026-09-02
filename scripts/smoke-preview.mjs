@@ -18,7 +18,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeChecker, startHarness, workDir } from './smoke-lib.mjs';
+import { ensureLargeClip, makeChecker, startHarness, workDir } from './smoke-lib.mjs';
 import { root } from './esbuild.config.mjs';
 
 const ffmpeg = path.join(root, 'resources', 'bin', 'ffmpeg.exe');
@@ -210,6 +210,78 @@ console.log('\n=== the suggested output name is free (§12) ===');
     c.check('skips past both taken names', path.basename(result.taken), 'output3.webp');
     c.check('leaves a free name alone', path.basename(result.free), 'fresh.webp');
     c.check('continues an existing number run', path.basename(result.numbered), 'clip2025.gif');
+  }
+}
+
+/* -- 4. The canvas keeps painting under cache pressure (§7, §11) ------------ */
+
+console.log('');
+console.log('=== the preview survives cache eviction (§7, §11) ===');
+{
+  const clip = ensureLargeClip();
+  const result = await harness.run(
+    `
+    (async () => {
+      const errors = [];
+      window.addEventListener('error', (e) => errors.push(String(e.message)));
+
+      const store = window.__mwStore;
+      const { importFiles } = await import('/media/importMedia.ts');
+
+      await importFiles([${JSON.stringify(clip)}], { x: 0, y: 0 });
+      await window.__mwIdle();
+      store.getState().setSelection([]);
+
+      // A fingerprint of what the content layer actually painted. Whether a
+      // Konva layer is still drawing is not observable from the store: the
+      // frame index advances either way, because it is set before the draw.
+      const fingerprint = () => {
+        const c = document.querySelector('.viewport canvas');
+        if (!c) return 'no-canvas';
+        const d = c.getContext('2d', { willReadFrequently: true })
+          .getImageData(0, 0, c.width, c.height).data;
+        let h = 0;
+        for (let i = 0; i < d.length; i += 4001) h = (h * 31 + d[i]) | 0;
+        return String(h);
+      };
+
+      const ids = store.getState().doc.objects.map((o) => o.id);
+      let previous = fingerprint();
+      let dead = 0;
+
+      for (let i = 0; i < 6; i += 1) {
+        // The reported trigger: resizing the canvas and shoving things about
+        // while a long layer plays. Both drive extra redraws, which is what
+        // brings the race forward.
+        store.getState().apply('stress resize', (d) => {
+          d.canvasRect = { ...d.canvasRect, width: 900 + (i % 5) * 100, height: 500 + (i % 3) * 80 };
+        });
+        store.getState().applyMerged('stress move ' + i, (d) => {
+          for (const o of d.objects) if (ids.includes(o.id)) o.x += i % 2 ? 11 : -11;
+        });
+
+        await new Promise((r) => setTimeout(r, 900));
+        const now = fingerprint();
+        if (now === previous) dead += 1;
+        previous = now;
+      }
+
+      return { ok: true, dead, errors: [...new Set(errors)].slice(0, 3) };
+    })()
+  `,
+    { timeoutMs: 180_000 },
+  );
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    // Eviction closing a bitmap a node still points at throws InvalidStateError
+    // from inside Konva's layer draw. That leaves the layer's `_waitingForDraw`
+    // latched, so the canvas never paints again: media stops animating and
+    // dragging an object appears to do nothing.
+    c.check('no uncaught errors from the draw', result.errors, []);
+    c.check('the canvas repainted every second', result.dead, 0);
   }
 }
 

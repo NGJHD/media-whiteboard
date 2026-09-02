@@ -16,6 +16,8 @@ const BUDGET_BYTES = 512 * 1024 * 1024;
 interface Entry {
   bitmap: ImageBitmap;
   bytes: number;
+  /** Which layer this frame belongs to, so eviction can spare its last frame. */
+  cacheKey: string;
 }
 
 /** Map iteration order is insertion order, which makes it usable as an LRU. */
@@ -30,6 +32,10 @@ function keyFor(cacheKey: string, index: number): string {
 function evictTo(limit: number): void {
   for (const [key, entry] of entries) {
     if (totalBytes <= limit) return;
+    // Never close the frame a layer is currently standing on. `peekOrLast`
+    // hands that bitmap out whenever the exact frame is not resident, and
+    // closing it turns the next draw into a detached-source error.
+    if (lastDrawn.get(entry.cacheKey) === entry.bitmap) continue;
     entry.bitmap.close();
     entries.delete(key);
     totalBytes -= entry.bytes;
@@ -46,10 +52,23 @@ function touch(key: string, entry: Entry): void {
 export function peek(cacheKey: string, index: number): ImageBitmap | null {
   const key = keyFor(cacheKey, index);
   const entry = entries.get(key);
-  if (!entry) return null;
+  if (!entry || !alive(entry.bitmap)) return null;
   touch(key, entry);
   lastDrawn.set(cacheKey, entry.bitmap);
   return entry.bitmap;
+}
+
+/**
+ * A closed `ImageBitmap` reports zero dimensions, and drawing one throws
+ * `InvalidStateError` from inside Konva's layer draw — which leaves the layer's
+ * `_waitingForDraw` latched and the canvas frozen for good.
+ *
+ * Eviction is prevented from closing anything reachable above, so this should
+ * never fire. It is here because the consequence of being wrong is not a wrong
+ * pixel, it is a dead canvas.
+ */
+function alive(bitmap: ImageBitmap): boolean {
+  return bitmap.width > 0 && bitmap.height > 0;
 }
 
 /**
@@ -67,7 +86,13 @@ export function peek(cacheKey: string, index: number): ImageBitmap | null {
 const lastDrawn = new Map<string, ImageBitmap>();
 
 export function peekOrLast(cacheKey: string, index: number): ImageBitmap | null {
-  return peek(cacheKey, index) ?? lastDrawn.get(cacheKey) ?? null;
+  const exact = peek(cacheKey, index);
+  if (exact) return exact;
+
+  const last = lastDrawn.get(cacheKey);
+  if (last && alive(last)) return last;
+  lastDrawn.delete(cacheKey);
+  return null;
 }
 
 export async function load(cacheKey: string, index: number): Promise<ImageBitmap | null> {
@@ -89,7 +114,7 @@ export async function load(cacheKey: string, index: number): Promise<ImageBitmap
       const bitmap = await createImageBitmap(await response.blob());
 
       const bytes = bitmap.width * bitmap.height * 4;
-      entries.set(key, { bitmap, bytes });
+      entries.set(key, { bitmap, bytes, cacheKey });
       totalBytes += bytes;
       evictTo(BUDGET_BYTES);
       return bitmap;

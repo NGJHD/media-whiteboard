@@ -264,6 +264,66 @@ console.log('=== double-click edits text (§10) ===');
   }
 }
 
+/* -- 5. Right-clicking empty canvas gets the canvas menu (§11) -------------- */
+
+console.log('');
+console.log('=== right-click on empty canvas (§11) ===');
+{
+  const result = await harness.run(`
+    (async () => {
+      ${preamble}
+      s().apply('setup', (d) => {
+        d.canvasRect = { x: -400, y: -300, width: 800, height: 600 };
+        d.objects = [shape('a', -200, -150, 100, 100)];
+      });
+      s().setTool('select');
+      await frame();
+
+      const items = () =>
+        [...document.querySelectorAll('.context-menu button')].map((b) => b.textContent.trim());
+
+      function rightClick(wx, wy) {
+        const el = content();
+        const box = el.getBoundingClientRect();
+        const p = toScreen(wx, wy);
+        el.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true, cancelable: true, view: window, button: 2,
+          clientX: box.left + p.x, clientY: box.top + p.y,
+        }));
+      }
+
+      // With something selected, right-click far away from it.
+      s().setSelection(['a']);
+      await frame();
+      rightClick(250, 200);
+      await new Promise((r) => setTimeout(r, 200));
+      const onEmpty = { menu: items(), selection: s().selection.length };
+
+      // And on the object itself.
+      rightClick(-200, -150);
+      await new Promise((r) => setTimeout(r, 200));
+      const onObject = { menu: items(), selection: s().selection.slice() };
+
+      return { ok: true, onEmpty, onObject };
+    })()
+  `);
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    // A right-click never reaches the mousedown handler that deselects, so
+    // without deselecting here the menu belonged to an object nowhere near the
+    // cursor — Delete and the z-order moves, on empty canvas.
+    c.check('empty canvas gets Paste and Select All', result.onEmpty.menu, ['Paste', 'Select All']);
+    c.check('and the selection is dropped', result.onEmpty.selection, 0);
+    c.check('an object gets Delete and the z-order moves', result.onObject.menu, [
+      'Delete', 'Bring Forward', 'Send Backward', 'Bring to Front', 'Send to Back',
+    ]);
+    c.check('and is selected by the right-click', result.onObject.selection, ['a']);
+  }
+}
+
 await harness.stop();
 console.log(c.failures === 0 ? '\nAll interaction smoke tests passed.' : `\n${c.failures} failed.`);
 process.exit(c.failures === 0 ? 0 : 1);

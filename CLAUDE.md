@@ -305,6 +305,13 @@ identical — the trade is cache size, which the LRU cap already governs.
 LRU cache of decoded `ImageBitmap`, **budgeted in bytes** (not frame count), capped
 around 512 MB. Evict least-recently-drawn.
 
+**Eviction may not close a frame the preview is still standing on.** A long or
+large source cannot fit — a 17 s 1080x2520 clip is ~11 GB of decoded bitmaps
+against a 512 MB budget — so the preview misses constantly and falls back to the
+last frame each layer drew. Closing that frame turns the next draw into a
+detached-source error. Keep one frame per layer pinned, and treat a zero-sized
+bitmap as absent rather than drawing it.
+
 ---
 
 ## 8. Timing and loop model
@@ -580,7 +587,10 @@ Delete · — · Bring Forward · Send Backward · Bring to Front · Send to Bac
 
 The one-step moves come first: they are the ones reached for repeatedly.
 
-Right-click on empty canvas: Paste · Select All.
+Right-click on empty canvas: Paste · Select All. **It deselects first** — a
+right-click never reaches the mousedown handler that would otherwise have cleared
+the selection, so without this the menu belongs to an object nowhere near the
+cursor.
 
 Nothing else belongs here. Z-order has no other home (§5), and everything that does
 — object properties — lives in the options row where it is visible without a click.
@@ -597,8 +607,19 @@ Depth 100.
 ### Live preview
 
 The canvas **animates continuously** while editing, driven by one shared
-`requestAnimationFrame` loop that advances a global `outputFrameIndex` and calls
-`layer.batchDraw()` once. Never one timer per layer.
+`requestAnimationFrame` loop that advances a global `outputFrameIndex` and draws
+once. Never one timer per layer.
+
+**The loop draws synchronously.** It already *is* the animation frame, so
+`batchDraw` would only defer the real draw to a later callback — and that gap is
+long enough for an in-flight decode to land and evict a bitmap that a node built
+this frame is still pointing at. Drawing in the same synchronous block keeps
+peek-and-draw atomic.
+
+This matters more than it sounds: a `drawImage` on a closed `ImageBitmap` throws
+from inside Konva's layer draw, which leaves that layer's `_waitingForDraw`
+latched. The canvas then never paints again — media stops animating and dragging
+an object appears to do nothing, while the rest of the app carries on.
 
 If the preview drops below ~15 fps, degrade by skipping preview frames — never by
 changing what gets exported.

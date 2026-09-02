@@ -229,13 +229,19 @@ export function Viewport() {
       const world = screenToWorld(state.view, pointer.x, pointer.y);
       const hit = objectsAt(state.doc, world.x, world.y)[0];
 
-      if (hit && !state.selection.includes(hit.id)) state.setSelection([hit.id]);
-      setMenu({
-        x: pointer.x,
-        y: pointer.y,
-        world,
-        onObject: Boolean(hit) || useStore.getState().selection.length > 0,
-      });
+      if (hit) {
+        // Right-clicking outside the current selection retargets it, as every
+        // editor does; right-clicking inside a multi-selection keeps it.
+        if (!state.selection.includes(hit.id)) state.setSelection([hit.id]);
+      } else {
+        // §11: empty canvas gets the canvas menu. A right-click never reaches
+        // the mousedown handler that would otherwise have deselected, so it has
+        // to do it here — otherwise the menu belongs to an object nowhere near
+        // the cursor.
+        state.setSelection([]);
+      }
+
+      setMenu({ x: pointer.x, y: pointer.y, world, onObject: Boolean(hit) });
     });
 
     return () => {
@@ -341,9 +347,16 @@ export function Viewport() {
       drawOverlay(overlay, { ...state, snapGuides: guides, marquee });
       interaction.sync();
 
-      content.batchDraw();
-      overlay.batchDraw();
-      interaction.layer.batchDraw();
+      // `draw`, not `batchDraw`. This function *is* the animation frame, so
+      // deferring to another one buys no coalescing and costs a frame of
+      // latency — but more importantly it opens a window. `batchDraw` runs the
+      // real draw from a later callback, and between building these nodes and
+      // Konva reading their bitmaps, an in-flight decode can land and evict one.
+      // Drawing here keeps peek-and-draw in a single synchronous block, so
+      // nothing can be freed out from under a node that is about to be drawn.
+      content.draw();
+      overlay.draw();
+      interaction.layer.draw();
     };
 
     raf = requestAnimationFrame(tick);

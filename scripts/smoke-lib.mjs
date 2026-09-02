@@ -9,7 +9,7 @@
 import { context as esbuildContext } from 'esbuild';
 import { createServer } from 'vite';
 import electronPath from 'electron';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { bundles, root } from './esbuild.config.mjs';
@@ -110,4 +110,34 @@ export function makeChecker() {
       return failures;
     },
   };
+}
+
+/**
+ * A clip big enough to matter, generated on demand into the smoke work
+ * directory rather than committed.
+ *
+ * Two tests need one, for the same reason: every fixture in `test-fixtures` is
+ * small enough to decode instantly and to sit entirely in the §7 in-memory
+ * budget, so neither a decode that is still running nor a cache under real
+ * eviction pressure can be observed with them.
+ *
+ * The dimensions are the point, not the length. At 2560x1440 a decoded frame is
+ * ~14.7 MB, so only about 34 of these 480 fit in the 512 MB budget — the preview
+ * misses on almost every frame, which is the state the reported freeze needed.
+ * A 1920x1080 clip fits ~64 frames and the prefetch keeps up, so it never
+ * reproduces.
+ *
+ * mjpeg because the LGPL build has no x264 (§15) and it decodes fast — the cost
+ * under test is the PNG encode and the renderer's bitmap churn, not this.
+ */
+export function ensureLargeClip() {
+  const file = path.join(workDir, 'large-clip.avi');
+  if (fs.existsSync(file)) return file;
+  execFileSync(path.join(root, 'resources', 'bin', 'ffmpeg.exe'), [
+    '-y', '-v', 'error',
+    '-f', 'lavfi', '-i', 'testsrc2=size=2560x1440:rate=60:duration=8',
+    '-c:v', 'mjpeg', '-q:v', '3',
+    file,
+  ]);
+  return file;
 }

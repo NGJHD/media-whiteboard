@@ -6,10 +6,9 @@
  * refused without adding a layer, and a second import of the same file is a
  * cache hit rather than a re-decode.
  */
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeChecker, startHarness, workDir } from './smoke-lib.mjs';
+import { ensureLargeClip, makeChecker, startHarness, workDir } from './smoke-lib.mjs';
 import { root } from './esbuild.config.mjs';
 
 const fixtures = path.join(root, 'test-fixtures');
@@ -318,17 +317,16 @@ console.log('\n=== cache hit on re-import ===');
 console.log('');
 console.log('=== deleting a layer cancels its decode (§7) ===');
 {
-  // Generated rather than committed: this has to still be decoding when the
-  // delete lands, and every fixture in the repo finishes instantly.
-  const slow = path.join(workDir, 'slow-decode.avi');
-  if (!fs.existsSync(slow)) {
-    execFileSync(path.join(root, 'resources', 'bin', 'ffmpeg.exe'), [
-      '-y', '-v', 'error',
-      '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=30:duration=10',
-      '-c:v', 'mjpeg', '-q:v', '3',
-      slow,
-    ]);
-  }
+  // This has to still be decoding when the delete lands, and every fixture in
+  // the repo finishes instantly.
+  //
+  // A throwaway copy, not the shared clip: the cache key is derived from the
+  // source path, so reusing it would hit the entry another test already
+  // published and the import would finish before there was anything to cancel.
+  // The copy is never published either — the decode is cancelled — so it leaves
+  // nothing behind.
+  const slow = path.join(workDir, `cancel-${Date.now()}.avi`);
+  fs.copyFileSync(ensureLargeClip(), slow);
 
   const result = await harness.run(`
     (async () => {
@@ -371,6 +369,8 @@ console.log('=== deleting a layer cancels its decode (§7) ===');
       .filter((n) => n.endsWith('.partial') || n.includes('.first.'));
     c.check('no half-written entry left behind', leftovers, []);
   }
+
+  fs.rmSync(slow, { force: true });
 }
 
 await harness.stop();

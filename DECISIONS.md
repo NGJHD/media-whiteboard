@@ -519,3 +519,61 @@ object disappears, and that list grows.
 A cancellation is not a failure. `CancelledError` is thrown past the reporting
 path so no §14 toast fires — the user asked for it, and the progress bar it
 belonged to is already gone.
+
+---
+
+## D-028 — The preview loop draws synchronously
+
+**Decision**: the shared rAF loop calls `layer.draw()`, not `layer.batchDraw()`.
+And `evictTo` never closes the bitmap a layer is currently standing on.
+
+**Why**: a reported freeze — after dropping in a 17 s 1080x2520 clip, resizing
+the canvas or moving objects would kill the canvas. Media stopped animating,
+dragging appeared to do nothing, and the rest of the app carried on as normal.
+
+The cause was one uncaught exception:
+
+```
+InvalidStateError: Failed to execute 'drawImage' … The image source is detached
+  at Image._sceneFunc (konva) → Layer._drawChildren
+```
+
+That clip is ~11 GB of decoded bitmaps against a 512 MB budget, so only ~49 of
+its 1020 frames are resident and the preview misses on nearly every frame,
+falling back to `peekOrLast`. Eviction closed the very frame that fallback was
+handing out.
+
+The freeze rather than a stutter is `batchDraw`'s doing. It sets
+`_waitingForDraw` and schedules the real draw for later; if that draw throws, the
+flag is never cleared and the layer never schedules another. One bad frame kills
+the canvas permanently.
+
+So both halves are fixed, and a third guard added:
+
+- `evictTo` skips the entry a layer's `lastDrawn` points at, so the fallback can
+  never dangle.
+- The loop draws synchronously, closing the window between building nodes and
+  Konva reading their bitmaps. It is the animation frame already; deferring to
+  another one bought nothing but latency.
+- `peek`/`peekOrLast` treat a zero-sized bitmap as absent. A closed
+  `ImageBitmap` reports 0x0, and the cost of being wrong here is not a wrong
+  pixel, it is a dead canvas.
+
+`scripts/smoke-preview.mjs` reproduces it: 480 frames at 2560x1440 (~34 resident
+of 480), stressed with canvas resizes and object moves, fingerprinting what the
+content layer actually painted. Before the fix, 4 of 6 seconds painted nothing.
+Frame size is the trigger, not length — a 1920x1080 clip fits ~64 frames, the
+prefetch keeps up, and it never reproduces.
+
+---
+
+## D-029 — A right-click on empty canvas deselects
+
+**Decision**: the `contextmenu` handler clears the selection when nothing is
+under the cursor, and `onObject` is `Boolean(hit)` alone.
+
+**Why**: it used to be `Boolean(hit) || selection.length > 0`, which meant that
+with anything selected, right-clicking bare canvas produced the *object* menu —
+Delete and the z-order moves, aimed at something nowhere near the pointer. Left
+click deselects on empty space via the mousedown handler, but a right-click
+returns from that handler early, so the contextmenu handler has to do it itself.
