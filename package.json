@@ -10,8 +10,11 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
-    "package": "npm run build && electron-builder --dir",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.renderer.json"
+    "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+    "prepackage": "npm run fetch:ffmpeg && npm run build",
+    "package": "electron-builder --dir",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.renderer.json",
+    "smoke:export": "node scripts/smoke-export.mjs"
   },
   "dependencies": {},
   "devDependencies": {

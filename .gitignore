@@ -17,3 +17,6 @@ Thumbs.db
 
 # tsc --build incremental state
 *.tsbuildinfo
+
+# ffmpeg download cache (checksum-verified, re-fetchable)
+resources/.download/

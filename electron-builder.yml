@@ -11,6 +11,12 @@ files:
   - dist/**/*
   - package.json
 
+# LGPL redistribution requires the notices to travel with the binaries (§15).
+extraFiles:
+  - THIRD-PARTY-NOTICES.md
+  - LICENSE.ffmpeg.txt
+  - LICENSE
+
 # ffmpeg.exe / ffprobe.exe land here in step 2. They must exist as real files on
 # disk, so they are extraResources and asar must not swallow them.
 extraResources:

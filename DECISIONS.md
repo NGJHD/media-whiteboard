@@ -148,6 +148,76 @@ styled from live measurements.
 
 ---
 
+## D-010 — Frames are structured-cloned, not transferred
+
+**Decision**: the export frame channel posts `{ type, index, buffer }` over a
+MessagePort **without** a transfer list.
+
+**Why**: §3 asks for `postMessage` with a transfer list, and that is not possible
+in Electron. Its MessagePort transfer list accepts only MessagePorts; putting an
+`ArrayBuffer` in it makes the entire message deserialize to `null` on the main
+side. Verified twice: wrapped in an object, and as a bare `ArrayBuffer` — both
+arrive as `null`, so main throws reading `.type` (or silently never acks).
+
+What §3 was actually protecting against — `ipcRenderer.invoke` serialising several
+MB per frame through the IPC router — is still avoided. The port is a direct
+channel to main, and a cross-process copy is unavoidable regardless, since the
+pixels must physically reach another process. The only cost of not transferring
+is that the renderer's buffer is not detached.
+
+Measured on this machine at 1280×720:
+
+| Format | Frames | Total | Per frame |
+|---|---|---|---|
+| WebP | 120 | 8.1 s | 67 ms |
+| GIF | 120 | 15.4 s | 128 ms (includes both palette passes over a 442 MB scratch file) |
+
+That is 442 MB of raw pixels moved per run. The transport is not the bottleneck;
+libwebp encoding and the mandated per-frame event-loop yield dominate. Revisit
+only if a future Electron supports ArrayBuffer transfer.
+
+---
+
+## D-011 — Backpressure is a per-frame ack
+
+**Decision**: main acknowledges each frame, and the render loop awaits the ack
+before rendering the next.
+
+**Why**: §3 requires honouring ffmpeg's stdin backpressure, but `stdin.write()`
+returns its `false` in the main process while the render loop lives in the
+renderer. The ack carries that signal across the boundary: main only acks after
+the pipe has accepted the write, awaiting `'drain'` first when it has not. A slow
+encoder therefore throttles rendering instead of letting frames queue in memory.
+
+An error reply also rejects every in-flight frame promise. Without that, an
+encoder that dies mid-export leaves the render loop awaiting an ack that will
+never arrive, and the export hangs instead of reporting the failure — which is
+exactly how the first ffmpeg-path bug presented.
+
+---
+
+## D-012 — Export has a scriptable smoke test
+
+**Decision**: `npm run smoke:export [webp|gif|both]` runs a real export through the
+real transport and verifies the output with ffprobe. Results come back through a
+file, not stdout.
+
+**Why**: the export pipe is the highest-risk part of this project (§16 step 2) and
+clicking a button is not a repeatable check. The test asserts codec, dimensions
+and frame count, because ffmpeg exiting 0 does not prove the file animates — and
+separately the loop flag was verified by reading the GIF `NETSCAPE2.0` extension
+and the WebP `ANIM` chunk, both `loop_count = 0`.
+
+The result goes to a file because an Electron GUI process on Windows does not
+reliably attach to a parent console: a piped `console.log` from main is silently
+lost, and every failure looks identical to a hang. That cost real debugging time
+before the file channel was added.
+
+`MW_W`/`MW_H`/`MW_FRAMES`/`MW_FPS` override the defaults, so the same harness
+measures throughput at a realistic canvas size.
+
+---
+
 ## Open items
 
 Recorded here so they are not silently forgotten:
@@ -155,13 +225,6 @@ Recorded here so they are not silently forgotten:
 - **`canvasRect` origin**: starts centred on the world origin at
   `(-640, -360, 1280, 720)`, so the ±2048 clamp in §4 is symmetric. To be applied
   when the document model lands in a later step.
-- **ffmpeg build selection**: BtbN `win64-lgpl` is the candidate. `libwebp` presence
-  must be confirmed with `ffmpeg -hide_banner -encoders | findstr webp` before the
-  version is pinned (§15). A local GPL ffmpeg 9.0 was checked as a sanity test and
-  does have `libwebp_anim` (encoder) and `webp_anim` (demuxer + decoder), so animated
-  WebP in and out is achievable on a current build — but that says nothing about what
-  the LGPL build ships.
-- **Zero-copy export frames**: §3 wants a transfer-list `postMessage`, but
-  `contextBridge` structured-clones everything crossing the isolated-world boundary.
-  A `MessageChannel` handshake is the intended route; to be prototyped and measured
-  in step 2 against a plain clone, with the sandbox settings unchanged either way.
+- ~~**ffmpeg build selection**~~ — resolved in step 2. Pinned in
+  `scripts/ffmpeg-build.json`; see D-006 and `THIRD-PARTY-NOTICES.md`.
+- ~~**Zero-copy export frames**~~ — resolved in step 2, negatively. See D-010.
