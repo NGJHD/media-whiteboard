@@ -9,7 +9,9 @@ import { cycleAt, objectsAt } from '../actions/objectActions';
 import { screenToWorld, useStore } from '../state/store';
 import { drawOverlay } from './overlay';
 import { createInteraction, objectsIntersecting, type InteractionHandle } from './interaction';
+import { beginShape, beginStroke, placeText, type DrawGesture } from './drawTools';
 import { ContextMenu, type MenuState } from '../ui/ContextMenu';
+import { TextEditor } from '../ui/TextEditor';
 
 /** How far ahead to decode. Roughly half a second at typical output rates. */
 const PREFETCH_FRAMES = 12;
@@ -33,6 +35,7 @@ export function Viewport() {
   const marqueeRef = useRef<{ origin: { x: number; y: number }; rect: Rect; additive: boolean } | null>(null);
   const panRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
   const spaceRef = useRef(false);
+  const drawRef = useRef<DrawGesture | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
 
   useLayoutEffect(() => {
@@ -67,12 +70,31 @@ export function Viewport() {
     stage.on('mousedown touchstart', (e) => {
       setMenu(null);
       const state = useStore.getState();
-      if (state.tool !== 'select') return;
-
       const pointer = stage.getPointerPosition();
       if (!pointer) return;
-
       const mouse = e.evt as MouseEvent;
+
+      // A drawing tool owns the pointer entirely (§10).
+      if (state.tool !== 'select') {
+        if (mouse.button !== 0) return;
+        const world = screenToWorld(state.view, pointer.x, pointer.y);
+
+        switch (state.tool) {
+          case 'brush':
+          case 'eraser':
+            drawRef.current = beginStroke(world, state.tool);
+            return;
+          case 'rect':
+          case 'ellipse':
+            drawRef.current = beginShape(world, state.tool);
+            return;
+          case 'text':
+            placeText(world);
+            return;
+          default:
+            return;
+        }
+      }
 
       // Space+drag, or the middle button, pans whatever is underneath (§11).
       if (spaceRef.current || mouse.button === 1) {
@@ -117,10 +139,19 @@ export function Viewport() {
       };
     });
 
-    stage.on('mousemove touchmove', () => {
+    stage.on('mousemove touchmove', (e) => {
       const pointer = stage.getPointerPosition();
       if (!pointer) return;
       const state = useStore.getState();
+
+      if (drawRef.current) {
+        const mouse = e.evt as MouseEvent;
+        drawRef.current.move(screenToWorld(state.view, pointer.x, pointer.y), {
+          alt: mouse.altKey,
+          shift: mouse.shiftKey,
+        });
+        return;
+      }
 
       if (panRef.current) {
         const pan = panRef.current;
@@ -142,7 +173,23 @@ export function Viewport() {
       };
     });
 
-    const finishPointer = () => {
+    const finishPointer = (e?: { evt: Event }) => {
+      if (drawRef.current) {
+        const pointer = stage.getPointerPosition();
+        const state = useStore.getState();
+        const mouse = e?.evt as MouseEvent | undefined;
+        if (pointer) {
+          drawRef.current.end(screenToWorld(state.view, pointer.x, pointer.y), {
+            alt: mouse?.altKey ?? false,
+            shift: mouse?.shiftKey ?? false,
+          });
+        } else {
+          drawRef.current.cancel();
+        }
+        drawRef.current = null;
+        return;
+      }
+
       panRef.current = null;
       const marquee = marqueeRef.current;
       marqueeRef.current = null;
@@ -265,7 +312,7 @@ export function Viewport() {
 
       const marquee = marqueeRef.current?.rect ?? null;
       const guides = interaction.guides();
-      const interacting = marquee !== null || guides.length > 0;
+      const interacting = marquee !== null || guides.length > 0 || drawRef.current !== null;
 
       // Nothing to redraw if neither the frame nor the document has moved. A
       // static document therefore costs one scene build, not sixty a second.
@@ -277,7 +324,13 @@ export function Viewport() {
 
       const { view } = state;
       content.destroyChildren();
-      const group = buildScene(state.doc, frame, { clipToCanvas: false });
+      const group = buildScene(state.doc, frame, {
+        clipToCanvas: false,
+        // The in-place editor sits exactly over this node (§10); drawing both
+        // would double up the glyphs. Export never sets this — the UI is
+        // blocked during export, so nothing can be mid-edit.
+        hiddenIds: state.editingTextId ? [state.editingTextId] : [],
+      });
       group.scale({ x: view.scale, y: view.scale });
       group.position({ x: view.offsetX, y: view.offsetY });
       content.add(group);
@@ -314,6 +367,7 @@ export function Viewport() {
         void importFiles(paths, at);
       }}
     >
+      <TextEditor />
       {menu ? <ContextMenu state={menu} onClose={() => setMenu(null)} /> : null}
     </div>
   );

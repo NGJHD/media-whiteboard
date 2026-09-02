@@ -5,6 +5,7 @@ import { enumerateFonts } from './state/fonts';
 import { installShortcuts } from './state/keyboard';
 import { useStore } from './state/store';
 import { planLoop } from './scene/timing';
+import { AboutDialog } from './ui/AboutDialog';
 import { BottomBar } from './ui/BottomBar';
 import { ExportModal, type ExportState } from './ui/ExportModal';
 import { TopBar } from './ui/TopBar';
@@ -15,6 +16,7 @@ export function App() {
   const toast = useStore((s) => s.toast);
   const setFonts = useStore((s) => s.setFonts);
   const [exportState, setExportState] = useState<ExportState | null>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   // Seed the default output path from the app folder, and enumerate fonts (§10).
@@ -40,6 +42,8 @@ export function App() {
     const plan = planLoop(doc);
 
     // §12: prompt before overwriting an existing file.
+    if (!(await window.api.confirmOverwrite(doc.outputPath))) return;
+
     const controller = new AbortController();
     abortRef.current = controller;
     setExportState({
@@ -74,10 +78,11 @@ export function App() {
 
   return (
     <div className="app">
-      <TopBar />
+      <TopBar onAbout={() => setAboutOpen(true)} />
       <Viewport />
       <BottomBar onGenerate={() => void generate()} />
       <Toasts />
+      {aboutOpen ? <AboutDialog onClose={() => setAboutOpen(false)} /> : null}
       {exportState ? (
         <ExportModal state={exportState} onCancel={() => abortRef.current?.abort()} />
       ) : null}

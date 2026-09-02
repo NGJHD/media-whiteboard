@@ -17,7 +17,7 @@ const TOOLS: Array<{ id: Tool; label: string; hint: string }> = [
  * §9 top bar: canvas size, trim to fit, background, the tool row, and the
  * options row.
  */
-export function TopBar() {
+export function TopBar({ onAbout }: { onAbout(): void }) {
   const doc = useStore((s) => s.doc);
   const tool = useStore((s) => s.tool);
   const setTool = useStore((s) => s.setTool);
@@ -135,6 +135,10 @@ export function TopBar() {
         </button>
 
         {error ? <span className="inline-error">{error}</span> : null}
+
+        <button className="ghost about-button" onClick={onAbout} title="About and cache settings">
+          About
+        </button>
       </div>
 
       <div className="topbar-row tools">

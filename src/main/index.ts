@@ -128,6 +128,30 @@ ipcMain.handle('shell:revealFile', (_e, filePath: string) => {
   shell.showItemInFolder(filePath);
 });
 
+/** §12: prompt before overwriting an existing file. */
+ipcMain.handle('dialog:confirmOverwrite', async (_e, filePath: string): Promise<boolean> => {
+  try {
+    await fsp.access(filePath);
+  } catch {
+    return true; // nothing there to overwrite
+  }
+
+  const [win] = BrowserWindow.getAllWindows();
+  const options = {
+    type: 'question' as const,
+    buttons: ['Replace', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Replace file?',
+    message: `${path.basename(filePath)} already exists.`,
+    detail: 'Generating will overwrite it.',
+  };
+  const result = win
+    ? await dialog.showMessageBox(win, options)
+    : await dialog.showMessageBox(options);
+  return result.response === 0;
+});
+
 registerExportHandler(() => paths.cacheDir);
 
 ipcMain.handle('media:import', (_e, sourcePath: string): Promise<ImportResult> =>

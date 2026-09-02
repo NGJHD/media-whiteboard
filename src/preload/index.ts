@@ -43,6 +43,7 @@ const api = {
   chooseOutputPath: (defaultPath: string, format: OutputFormat) =>
     ipcRenderer.invoke('dialog:chooseOutputPath', defaultPath, format),
   revealFile: (filePath: string) => ipcRenderer.invoke('shell:revealFile', filePath),
+  confirmOverwrite: (filePath: string) => ipcRenderer.invoke('dialog:confirmOverwrite', filePath),
 } satisfies Omit<Api, 'startExport'> & { startExport: typeof startExport };
 
 contextBridge.exposeInMainWorld('api', api);

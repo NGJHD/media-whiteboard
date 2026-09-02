@@ -4,6 +4,9 @@ import { useStore } from '../state/store';
 import { autoFps, FPS_OPTIONS, planLoop } from '../scene/timing';
 import { estimateBytes } from '../export/exportScene';
 
+/** §12 asks for this warning once, not once per format change. */
+let warnedAboutGifAlpha = false;
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
@@ -33,6 +36,16 @@ export function BottomBar({ onGenerate }: { onGenerate(): void }) {
       draft.format = format;
       draft.outputPath = draft.outputPath.replace(/\.(webp|gif)$/i, `.${format}`);
     });
+
+    // §12: warn once that GIF's 1-bit alpha makes soft edges ragged. Only worth
+    // saying when there is actually transparency to ruin.
+    if (format === 'gif' && doc.background.transparent && !warnedAboutGifAlpha) {
+      warnedAboutGifAlpha = true;
+      useStore.getState().toast(
+        'warn',
+        'GIF alpha is 1-bit: soft or anti-aliased transparent edges will look ragged.',
+      );
+    }
   }
 
   return (

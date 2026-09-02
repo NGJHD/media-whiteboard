@@ -69,7 +69,7 @@ interface State {
    */
   revision: number;
 
-  apply(label: string, recipe: (draft: Doc) => void, options?: { touchesPaint?: boolean }): void;
+  apply(label: string, recipe: (draft: Doc) => void): void;
   /** Merges into the previous entry when the label matches — for drags and sliders. */
   applyMerged(label: string, recipe: (draft: Doc) => void): void;
   undo(): void;
@@ -82,6 +82,12 @@ interface State {
   setViewport(size: { width: number; height: number }): void;
   fitToWindow(): void;
   setPreviewFrame(frame: number): void;
+  /**
+   * Forces a viewport redraw without a document change. Live brush strokes paint
+   * straight into the §6 buffer for feedback, and that buffer is not part of the
+   * document, so nothing else would tell the render loop to look again.
+   */
+  bumpRevision(): void;
 
   toast(kind: Toast['kind'], message: string, detail?: string): void;
   dismissToast(id: number): void;
@@ -115,12 +121,12 @@ export const useStore = create<State>((set, get) => ({
   previewFrame: 0,
   revision: 0,
 
-  apply(label, recipe, options) {
+  apply(label, recipe) {
     const state = get();
     const [next, patches, inverse] = produceWithPatches(state.doc, recipe);
     if (patches.length === 0) return;
 
-    const touchesPaint = options?.touchesPaint ?? patchesTouchPaint(patches);
+    const touchesPaint = patchesTouchPaint(patches);
     const undoStack = [...state.undoStack, { label, patches, inverse, touchesPaint }];
     if (undoStack.length > UNDO_DEPTH) undoStack.shift();
 
@@ -246,6 +252,10 @@ export const useStore = create<State>((set, get) => ({
 
   setPreviewFrame(previewFrame) {
     set({ previewFrame });
+  },
+
+  bumpRevision() {
+    set({ revision: get().revision + 1 });
   },
 
   toast(kind, message, detail) {

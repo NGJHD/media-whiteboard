@@ -171,6 +171,8 @@ export interface Api {
   clearCache(): Promise<CacheInfo>;
   chooseOutputPath(defaultPath: string, format: OutputFormat): Promise<string | null>;
   revealFile(filePath: string): Promise<void>;
+  /** §12: returns false when the user declines to overwrite. */
+  confirmOverwrite(filePath: string): Promise<boolean>;
 }
 
 declare global {

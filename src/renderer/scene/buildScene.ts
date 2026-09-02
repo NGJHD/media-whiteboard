@@ -1,5 +1,5 @@
 import Konva from 'konva';
-import type { Doc, SceneObject, ShapeObject, TextObject, MediaObject } from '../../shared/doc';
+import type { Doc, LayerId, SceneObject, ShapeObject, TextObject, MediaObject } from '../../shared/doc';
 import { peek } from '../media/bitmapCache';
 import { getPaintCanvas } from '../paint/paintBuffer';
 import { resolveFps, sourceFrameIndex } from './timing';
@@ -27,6 +27,12 @@ export interface BuildOptions {
    * out-of-canvas content stays visible while editing.
    */
   clipToCanvas: boolean;
+  /**
+   * Objects to omit. Used only by the preview, for the text object whose
+   * in-place editor is currently drawn over it (§10). Export passes nothing:
+   * the UI is blocked while it runs, so nothing can be mid-edit.
+   */
+  hiddenIds?: LayerId[];
 }
 
 export function buildScene(
@@ -63,7 +69,9 @@ export function buildScene(
 
   // 2. Objects, in array order (index 0 is the back).
   const fps = resolveFps(doc);
+  const hidden = options.hiddenIds;
   for (const obj of doc.objects) {
+    if (hidden && hidden.includes(obj.id)) continue;
     const node = buildObject(obj, frameIndex, fps);
     if (node) group.add(node);
   }

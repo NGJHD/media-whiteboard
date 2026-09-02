@@ -275,13 +275,61 @@ the version field is the narrower fix.
 
 ---
 
+## D-016 — Interaction proxies rather than a Transformer on scene nodes
+
+**Decision**: an interaction layer holds one invisible proxy rectangle per
+object. The Konva `Transformer` attaches to those, never to the nodes
+`buildScene` produced.
+
+**Why**: §10 asks for a Konva Transformer, and §3 has `buildScene` rebuild the
+content layer every frame. Those two are incompatible as written — a Transformer
+needs a stable node to hold on to, and a rebuilt node is a different object each
+frame. Proxies satisfy both: the Transformer is real, and content construction
+stays in one place. They are chrome, so they affect no output pixels.
+
+A multi-selection attaches the Transformer to a single group box rather than to
+each member. That is what makes §10's group-resize rule expressible: one uniform
+scale factor comes out, and it is applied to every member by §10's formula,
+including the `strokeWidth` and `fontSize`/`boxWidth` scaling. Attaching to each
+node would let Konva transform them independently and there would be no single
+`s` to reason about.
+
+---
+
+## D-017 — Paint commits still mark the entry as touching paint
+
+**Decision**: committing a brush or eraser stroke uses the ordinary `apply`, so
+the history entry is flagged as touching paint.
+
+**Why**: the live stroke has already been drawn into the §6 buffer, so the commit
+itself needs no redraw, and an early version suppressed the flag to say so. That
+was wrong: the flag is what makes *undo and redo* replay the buffer. Undoing a
+stroke removed it from the document while leaving its pixels on screen. The
+override that allowed this has been removed rather than left as a footgun.
+
+Caught by exporting after an undo and reading the pixels back, not by checking
+the stroke list — the document was correct the whole time.
+
+---
+
+## D-018 — `buildScene` can hide specific objects
+
+**Decision**: `BuildOptions.hiddenIds`, used only by the preview, for the text
+object whose in-place editor is currently drawn over it.
+
+**Why**: §10's editor is a DOM textarea positioned over the canvas and styled to
+match. Without hiding the Konva node underneath, the glyphs double up. Export
+never passes this — §12 blocks the UI while it runs, so nothing can be mid-edit —
+so preview and export still agree on every frame that gets encoded.
+
+---
+
 ## Open items
 
 Recorded here so they are not silently forgotten:
 
-- **`canvasRect` origin**: starts centred on the world origin at
-  `(-640, -360, 1280, 720)`, so the ±2048 clamp in §4 is symmetric. To be applied
-  when the document model lands in a later step.
+- ~~**`canvasRect` origin**~~ — applied: `createEmptyDoc` starts it centred on the
+  world origin at `(-640, -360, 1280, 720)`, so §4's ±2048 clamp is symmetric.
 - ~~**ffmpeg build selection**~~ — resolved in step 2. Pinned in
   `scripts/ffmpeg-build.json`; see D-006 and `THIRD-PARTY-NOTICES.md`.
 - ~~**Zero-copy export frames**~~ — resolved in step 2, negatively. See D-010.
