@@ -331,6 +331,7 @@ identical — the trade is cache size, which the LRU cap already governs.
 - **Persistence**: survives across sessions. Never cleared on exit.
 - **Eviction**: on startup, LRU-evict whole cache entries until total size ≤ **5 GB**.
 - **UI**: a "Clear cache" button showing current size (in a Settings or About dialog).
+  That dialog is also where the author, the repo link and the update button live (§15).
 
 ### In-memory
 
@@ -800,6 +801,18 @@ Every one of these is a toast plus a no-op — never a crash, never a silent fai
 
 - `electron-builder` with the `dir` and `zip` targets only. No NSIS, no MSI, no
   auto-updater — `zip` is an archive of the `dir` output, not an installer.
+- **The About dialog updates the app in place, on demand.** It shows the author
+  and a link to the GitHub repo, and carries a **Check for updates** button that
+  reads `/releases/latest`, downloads the release zip and replaces the install
+  folder. That is not the auto-updater ruled out above: nothing checks on launch
+  and nothing nags, and it needs no NSIS target, no `latest.yml` and no code
+  signing. See `DECISIONS.md` D-040.
+  - The updater is only as good as the release, so a release must have a tag of
+    `v<version>` matching `package.json` exactly, exactly one `.zip` asset named
+    to match `artifactName`, and be published rather than a draft.
+  - The app verifies the download's own version against the tag before applying
+    it. A disagreement is a hard stop, so a mislabelled release is a failed
+    update rather than a silent downgrade.
 - Ship `ffmpeg.exe` and `ffprobe.exe` in `resources/bin/`, marked as
   `extraResources` and **unpacked** (they must exist as real files on disk).
 - Resolve their paths via `process.resourcesPath` in production and a local path in

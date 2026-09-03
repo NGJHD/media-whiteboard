@@ -185,6 +185,7 @@ console.log('\n=== the Text tool opens an editor and keeps it (§10) ===');
       });
       s().setTool('text');
       await frame();
+      const undoBefore = s().undoStack.length;
 
       const at = toScreen(0, 0);
       send('mousedown', at.x, at.y);
@@ -198,6 +199,8 @@ console.log('\n=== the Text tool opens an editor and keeps it (§10) ===');
       return {
         ok: true,
         objects: s().doc.objects.length,
+        pending: s().pendingText !== null,
+        undoEntries: s().undoStack.length - undoBefore,
         editing: s().editingTextId !== null,
         editorOnScreen: Boolean(editor),
         editorFocused: editor ? document.activeElement === editor : false,
@@ -218,7 +221,13 @@ console.log('\n=== the Text tool opens an editor and keeps it (§10) ===');
     // `preventDefault` is what stops it. What this does pin is everything
     // around it: the object is created, the editor mounts, takes focus, and is
     // still there once the dust settles.
-    c.check('a text object was created', result.objects, 1);
+    // The object is `pendingText` until the editor commits with content (§10):
+    // an in-progress text is not yet an edit, so it is neither in the document
+    // nor on the undo stack. That is what keeps a cancelled text from leaving an
+    // undo entry behind, and a real one from costing two.
+    c.truthy('a text object is pending', result.pending);
+    c.check('but not in the document yet', result.objects, 0);
+    c.check('and nothing to undo yet', result.undoEntries, 0);
     c.truthy('it is still being edited', result.editing);
     c.truthy('the in-place editor is on screen', result.editorOnScreen);
     c.truthy('and has keyboard focus', result.editorFocused);

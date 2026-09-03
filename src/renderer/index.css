@@ -497,3 +497,39 @@ p.warn {
   font-size: 12px;
 }
 .about-cache .sub { margin: 0; font-size: 11px; color: var(--muted); }
+
+/* -------------------------------------------------------------------------- */
+/* About: repo link and self-update (UPDATE_BUTTON.md)                        */
+/* -------------------------------------------------------------------------- */
+
+/* An <a> only for the affordance — the click is intercepted and goes through
+   the main process, which re-checks the URL against this app's own repo.
+   Inherits its font from whatever it sits in, so the one inside a dd lines up
+   with the paths below it. */
+.about-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.about-link:hover { text-decoration: underline; }
+
+/* Deliberately the same box as .about-cache: both are "here is a state, here is
+   the one button that acts on it". */
+.about-update {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #1e2126;
+}
+
+.about-update > div { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.about-update strong { font-size: 13px; font-weight: 600; }
+.about-update .sub { margin: 0; font-size: 11px; color: var(--muted); }
+.about-update button { white-space: nowrap; }
+.about-update .bar { margin-top: 5px; }
+.update-error { color: #f2a8a8; }

@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { isOwnRepoUrl } from '../shared/about';
 import {
   PROJECT_EXTENSION,
   type AppInfo,
@@ -15,6 +16,10 @@ import {
   type ProjectFile,
   type ProjectLoadResult,
   type Settings,
+  type UpdateAvailable,
+  type UpdateCheck,
+  type UpdateInstallResult,
+  type UpdateProgress,
 } from '../shared/ipc';
 import { registerExportHandler } from './export';
 import { binaries } from './ffmpeg';
@@ -32,6 +37,7 @@ import {
   sweepPartials,
 } from './media';
 import { applyPaths, resolvePaths } from './paths';
+import { cancelUpdate, checkForUpdate, installUpdate, resolveAppVersion } from './updater';
 import { getSettings, initSettings, patchSettings, uniquePath } from './settings';
 
 const execFileAsync = promisify(execFile);
@@ -104,7 +110,7 @@ function createWindow(): void {
 }
 
 ipcMain.handle('app:getInfo', (): AppInfo => ({
-  appVersion: app.getVersion(),
+  appVersion: resolveAppVersion(paths.appFolder),
   electron: process.versions.electron,
   chrome: process.versions.chrome,
   node: process.versions.node,
@@ -275,6 +281,29 @@ ipcMain.handle('project:checkSources', async (_e, sourcePaths: string[]): Promis
     }
   }
   return missing;
+});
+
+/* -- Self-update (UPDATE_BUTTON.md) ---------------------------------------- */
+
+ipcMain.handle('update:check', (): Promise<UpdateCheck> => checkForUpdate(paths.appFolder));
+
+ipcMain.handle(
+  'update:install',
+  (event, target: UpdateAvailable): Promise<UpdateInstallResult> =>
+    installUpdate(target, (progress: UpdateProgress) => {
+      if (!event.sender.isDestroyed()) event.sender.send('update:progress', progress);
+    }),
+);
+
+ipcMain.on('update:cancel', () => cancelUpdate());
+
+/**
+ * The renderer may only send people to this app's own GitHub pages, and the URL
+ * is re-checked here rather than trusted. A general-purpose "open any URL"
+ * bridge is a hole worth not opening.
+ */
+ipcMain.handle('update:openLink', async (_e, url: string): Promise<void> => {
+  if (isOwnRepoUrl(url)) await shell.openExternal(url);
 });
 
 ipcMain.handle('cache:info', cacheInfo);

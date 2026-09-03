@@ -208,6 +208,46 @@ export type FrameReply =
   | { type: 'done'; result: ExportResult }
   | { type: 'error'; message: string; detail: string | null };
 
+/* -------------------------------------------------------------------------- */
+/* Self-update (UPDATE_BUTTON.md)                                             */
+/* -------------------------------------------------------------------------- */
+
+/** The one shape the renderer may hand back to `installUpdate`. */
+export interface UpdateAvailable {
+  status: 'available';
+  currentVersion: string;
+  latestVersion: string;
+  assetName: string;
+  assetUrl: string;
+  assetBytes: number;
+  releaseUrl: string;
+}
+
+export type UpdateCheck =
+  | { status: 'latest'; currentVersion: string; latestVersion: string }
+  | UpdateAvailable
+  | { status: 'error'; message: string };
+
+/**
+ * `applying` is terminal: the .cmd script has been launched and the app is
+ * about to quit, so there is nothing left for the dialog to do but say so.
+ */
+export type UpdatePhase = 'downloading' | 'unpacking' | 'verifying' | 'applying';
+
+export interface UpdateProgress {
+  phase: UpdatePhase;
+  /** Bytes written so far. Zero outside `downloading`. */
+  receivedBytes: number;
+  /** Content-Length, or 0 when the server did not send one. */
+  totalBytes: number;
+}
+
+export interface UpdateInstallResult {
+  ok: boolean;
+  cancelled: boolean;
+  error: string | null;
+}
+
 export interface Api {
   getAppInfo(): Promise<AppInfo>;
   getFfmpegInfo(): Promise<FfmpegInfo>;
@@ -247,6 +287,21 @@ export interface Api {
   clearCache(): Promise<CacheInfo>;
   chooseOutputPath(defaultPath: string, format: OutputFormat): Promise<string | null>;
   revealFile(filePath: string): Promise<void>;
+  /** §14-style: never throws. A failure comes back as `{ status: 'error' }`. */
+  checkForUpdate(): Promise<UpdateCheck>;
+  /**
+   * Downloads, verifies and applies the release `checkForUpdate` offered. On
+   * success it does not resolve in any useful sense — the app quits so the
+   * .cmd script can replace the folder it is running from.
+   */
+  installUpdate(target: UpdateAvailable): Promise<UpdateInstallResult>;
+  /** Aborts an in-flight download. No-op once unpacking has started. */
+  cancelUpdate(): void;
+  /** Download progress. Returns an unsubscribe function. */
+  onUpdateProgress(handler: (progress: UpdateProgress) => void): () => void;
+  /** Opens a link in the user's browser. Main rejects anything outside this
+   *  app's own GitHub pages. */
+  openRepoLink(url: string): Promise<void>;
   /** §12: returns false when the user declines to overwrite. */
   confirmOverwrite(filePath: string): Promise<boolean>;
 }

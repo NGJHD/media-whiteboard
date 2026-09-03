@@ -218,7 +218,18 @@ export function beginShape(start: Point, shape: 'rect' | 'ellipse'): DrawGesture
 /* Text (§10)                                                                 */
 /* -------------------------------------------------------------------------- */
 
-/** Click to place, then edit in place. The editor is a DOM textarea overlay. */
+/**
+ * Click to place, then edit in place. The editor is a DOM textarea overlay.
+ *
+ * The click sets the box's **left** edge, not its centre — the caret appears
+ * where the pointer was and the text runs to the right of it, which is what
+ * clicking to type means everywhere else. The model stores a centre (§5), so
+ * that is half a box width to the right of the click.
+ *
+ * Nothing is added to the document here: the object is `pendingText` until it
+ * commits with content, so a text that is placed and then clicked away from
+ * leaves no trace and a real one costs exactly one undo entry.
+ */
 export function placeText(at: Point): TextObject {
   const defaults = useToolDefaults.getState();
   const boxWidth = 320;
@@ -226,7 +237,7 @@ export function placeText(at: Point): TextObject {
   const object: TextObject = {
     id: newId(),
     kind: 'text',
-    x: clampToWorld(at.x),
+    x: clampToWorld(at.x + boxWidth / 2),
     y: clampToWorld(at.y),
     width: boxWidth,
     height: defaults.fontSize * 1.2,
@@ -244,12 +255,12 @@ export function placeText(at: Point): TextObject {
   clampObjectToWorld(object);
 
   const store = useStore.getState();
-  store.apply('Add text', (draft) => {
-    draft.objects.push(object);
-  });
+  // §10: back to Select, so the finished text can be moved immediately. Nothing
+  // is selected yet — there is no object to select until the editor commits.
   store.setTool('select');
-  store.setSelection([object.id]);
-  useStore.getState().setEditingText(object.id);
+  store.setSelection([]);
+  store.setPendingText(object);
+  store.setEditingText(object.id);
 
   return object;
 }

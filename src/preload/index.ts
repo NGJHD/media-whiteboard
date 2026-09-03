@@ -6,6 +6,8 @@ import type {
   OutputFormat,
   ProjectFile,
   Settings,
+  UpdateAvailable,
+  UpdateProgress,
 } from '../shared/ipc';
 
 /**
@@ -64,6 +66,19 @@ const api = {
   chooseOutputPath: (defaultPath: string, format: OutputFormat) =>
     ipcRenderer.invoke('dialog:chooseOutputPath', defaultPath, format),
   revealFile: (filePath: string) => ipcRenderer.invoke('shell:revealFile', filePath),
+  checkForUpdate: () => ipcRenderer.invoke('update:check'),
+  installUpdate: (target: UpdateAvailable) => ipcRenderer.invoke('update:install', target),
+  cancelUpdate: () => ipcRenderer.send('update:cancel'),
+  // Same push shape as media:progress — main knows when another chunk landed and
+  // the renderer has nothing useful to poll for in between.
+  onUpdateProgress: (handler: (progress: UpdateProgress) => void) => {
+    const listener = (_event: unknown, progress: UpdateProgress) => handler(progress);
+    ipcRenderer.on('update:progress', listener);
+    return () => {
+      ipcRenderer.removeListener('update:progress', listener);
+    };
+  },
+  openRepoLink: (url: string) => ipcRenderer.invoke('update:openLink', url),
   confirmOverwrite: (filePath: string) => ipcRenderer.invoke('dialog:confirmOverwrite', filePath),
 } satisfies Omit<Api, 'startExport'> & { startExport: typeof startExport };
 

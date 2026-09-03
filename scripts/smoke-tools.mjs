@@ -113,6 +113,118 @@ console.log('=== shape and text creation (§10) ===');
   }
 }
 
+/* -- 1b. Text placement, cancellation and undo (§10, §11) ------------------ */
+
+console.log('');
+console.log('=== text placement and undo (§10, §11) ===');
+{
+  const r = await harness.run(`
+    (async () => {
+      const { beginStroke, placeText } = await import('/canvas/drawTools.ts');
+      const store = window.__mwStore;
+      const s = () => store.getState();
+
+      /** Types into the live editor the way a user does, so React sees it. */
+      const type = (value) => {
+        const el = document.querySelector('.text-editor');
+        if (!el) throw new Error('no text editor on screen');
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(el, value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return el;
+      };
+      const settle = () => new Promise((r) => setTimeout(r, 60));
+
+      s().apply('reset', (d) => { d.objects = []; });
+      const base = { undo: s().undoStack.length, objects: s().doc.objects.length };
+
+      /* -- placing alone writes nothing ---------------------------------- */
+      const placed = placeText({ x: -100, y: -100 });
+      await settle();
+      const pending = s().pendingText;
+      const placedLeft = pending ? pending.x - pending.boxWidth / 2 : null;
+      const afterPlace = { undo: s().undoStack.length, objects: s().doc.objects.length,
+                           editorOnScreen: Boolean(document.querySelector('.text-editor')) };
+
+      /* -- clicking away without typing cancels outright ----------------- */
+      type('').blur();
+      await settle();
+      const afterCancel = { undo: s().undoStack.length, objects: s().doc.objects.length,
+                            editing: s().editingTextId, pending: s().pendingText,
+                            editorOnScreen: Boolean(document.querySelector('.text-editor')) };
+
+      /* -- a real text is exactly one entry ------------------------------ */
+      placeText({ x: 40, y: 40 });
+      await settle();
+      type('hello').blur();
+      await settle();
+      const afterCommit = { undo: s().undoStack.length, objects: s().doc.objects.length,
+                            label: s().undoStack[s().undoStack.length - 1]?.label,
+                            text: s().doc.objects[s().doc.objects.length - 1]?.text,
+                            selected: s().selection.length };
+
+      store.getState().undo();
+      const afterOneUndo = { objects: s().doc.objects.length };
+
+      /* -- the reported case: a stroke then a text, two undos ------------ */
+      s().apply('reset', (d) => { d.objects = []; d.paint.strokes = []; });
+      const strokesBefore = s().doc.paint.strokes.length;
+
+      const brush = beginStroke({ x: -60, y: 0 }, 'brush');
+      for (let x = -60; x <= 60; x += 20) brush.move({ x, y: 0 }, { alt: false, shift: false });
+      brush.end({ x: 60, y: 0 }, { alt: false, shift: false });
+
+      placeText({ x: 0, y: 120 });
+      await settle();
+      type('caption').blur();
+      await settle();
+
+      const both = { strokes: s().doc.paint.strokes.length, objects: s().doc.objects.length };
+      store.getState().undo();
+      const undo1 = { strokes: s().doc.paint.strokes.length, objects: s().doc.objects.length };
+      store.getState().undo();
+      const undo2 = { strokes: s().doc.paint.strokes.length, objects: s().doc.objects.length };
+
+      return { ok: true, placedLeft, placedKind: placed.kind, base, afterPlace, afterCancel,
+               afterCommit, afterOneUndo, strokesBefore, both, undo1, undo2 };
+    })()
+  `);
+
+  if (!r.ok) {
+    c.fail(`text: ${r.error}`);
+    for (const line of r.log ?? []) console.error(`    ${line}`);
+  } else {
+    // The click sets the box's left edge, not its centre.
+    c.check('the click is the box left edge', r.placedLeft, -100);
+
+    // Placing is not yet an edit: nothing in the document, nothing to undo.
+    c.check('placing writes no undo entry', r.afterPlace.undo, r.base.undo);
+    c.check('placing adds no object yet', r.afterPlace.objects, r.base.objects);
+    c.truthy('the editor is on screen', r.afterPlace.editorOnScreen);
+
+    // Clicking away from an empty editor must leave nothing behind at all —
+    // an undo entry here is one that appears to do nothing when pressed.
+    c.check('a cancelled text writes no undo entry', r.afterCancel.undo, r.base.undo);
+    c.check('a cancelled text adds no object', r.afterCancel.objects, r.base.objects);
+    c.check('the editor closes', r.afterCancel.editing, null);
+    c.check('nothing stays pending', r.afterCancel.pending, null);
+    c.truthy('the editor leaves the screen', !r.afterCancel.editorOnScreen);
+
+    // §11: one text insertion is one undo step, not two.
+    c.check('a committed text is one undo entry', r.afterCommit.undo, r.base.undo + 1);
+    c.check('it is labelled Add text', r.afterCommit.label, 'Add text');
+    c.check('the typed text is kept', r.afterCommit.text, 'hello');
+    c.check('the finished text is selected', r.afterCommit.selected, 1);
+    c.check('one undo removes it', r.afterOneUndo.objects, r.base.objects);
+
+    // The reported case: a brush stroke and a text, undone one step each.
+    c.check('a stroke and a text', [r.both.strokes, r.both.objects], [1, 1]);
+    c.check('one undo removes the text', [r.undo1.strokes, r.undo1.objects], [1, 0]);
+    c.check('the next undo removes the stroke', [r.undo2.strokes, r.undo2.objects], [0, 0]);
+  }
+}
+
 /* -- 2. Paint is raster, above everything, and undoes by replay (§6) ------- */
 
 console.log('');

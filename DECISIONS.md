@@ -809,3 +809,133 @@ comment saying otherwise sat directly above `keepRatio(true)`.
 every kind, media included. Both behaviours are pinned by
 `scripts/smoke-transform.mjs`: with Shift the rotation lands on a multiple of 15,
 without it on 17.
+
+---
+
+## D-040 — The About dialog carries a self-update button
+
+**Decision**: the info overlay opens with `Made by` and `Repo` rows — the
+author and a link to `github.com/NGJHD/media-whiteboard`, sitting in the same
+two-column grid as Version and the folder paths rather than in a byline of their
+own — and holds a **Check for updates** button
+that pulls a newer release off GitHub and replaces the install in place. Built to
+`UPDATE_BUTTON.md`, which is the reference for every trap listed below.
+
+`CLAUDE.md` §15 rules out an auto-updater and `electron-builder`'s update
+machinery — that wants an NSIS target, a `latest.yml` and code signing, none of
+which a plain portable zip has. This is the other shape: ~450 lines, no
+dependency, and **nothing automatic**. Nothing checks on launch and nothing nags;
+the user presses a button. It does not violate §15's "no auto-updater" because
+there is no updater running unless someone asks for one.
+
+**Where the pieces live**
+
+| File | Contents |
+|---|---|
+| `src/shared/about.ts` | app name, author, `owner/repo`, asset suffix. The only file that changes if this is lifted into another app. |
+| `src/shared/version.ts` | `parseVersion` / `compareVersions` / `isNewer` / `sameVersion` / `pickReleaseAsset`. Pure — no Electron, no fs, no fetch. |
+| `src/main/updater.ts` | everything with a side effect: fetch, download, unpack, verify, the `.cmd`. |
+| `src/renderer/ui/AboutDialog.tsx` | the section's state machine and its one button. |
+| `scripts/smoke-update.mjs` | 28 assertions over `version.ts`, wired into `npm run smoke`. |
+
+**What the release has to look like** — the updater is only as good as it: tag
+`v<version>` matching `package.json` exactly, exactly one `.zip` asset, and a
+published release (`/releases/latest` skips drafts and pre-releases). The
+existing `RELEASE_GUIDE.md` loop already produces that.
+
+**No `update:about` channel.** `UPDATE_BUTTON.md` §3 lists five IPC channels;
+this has four (`update:check`, `update:install`, `update:cancel`,
+`update:openLink`) plus the `update:progress` event. `about.ts` is a shared
+module, so the renderer imports the name and the repo URL directly rather than
+asking main for constants it already has compiled in.
+
+**`app.getVersion()` is wrong in dev.** There is no `package.json` beside the
+loaded main script in a dev run, so Electron answers with *its own* version
+(44.1.1) — which compares as newer than every release and makes the check
+permanently report "latest". `resolveAppVersion` reads the project's
+`package.json` when `!app.isPackaged`, which also fixes the Version row in About,
+where 44.1.1 had always been showing.
+
+**The five traps, and what was done about them** (all four packaged-only ones
+were confirmed by the §8 test below):
+
+- **`spawn` refuses a `.cmd`** since the CVE-2024-27980 fix. Launched as
+  `spawn(ComSpec, ['/c', script])` — `cmd.exe` is a real exe and the script stays
+  its own argv entry. Never `shell: true` with an interpolated path.
+- **Waiting with `tasklist | find` hangs.** The script waits on the exe's *file
+  lock* instead: `2>nul (>>"%EXE%" call )` opens it for append and runs a no-op,
+  writing zero bytes and failing only while the file is held. No pipe, so nothing
+  to sit on.
+- **Unzip with `%SystemRoot%\System32\tar.exe`** (bsdtar, Windows 10 1803+),
+  falling back to `Expand-Archive`. The absolute path matters: a `tar` on PATH may
+  be Git for Windows' GNU tar, which cannot read zip.
+- **`robocopy /E /R:3 /W:2`**, not xcopy. Exit codes 0–7 are success, so the test
+  is `if errorlevel 8`. **No `/MIR`** — mirroring would delete the user's own
+  `data/` and `cache/` folders beside the exe (D-005).
+- **Verify before trusting.** `readAsarVersion` reads `version` straight out of
+  `resources/app.asar` (the header is JSON; no library). "Cannot read it" is
+  unknown and carries on; "read it and it disagrees" is a hard stop, because that
+  is a silent downgrade loop.
+
+**Other details that are load-bearing**: writability is checked *before* the
+download, not after 233 MB; the download is cancellable and Cancel disappears
+once unpacking starts, because there is nothing left to abort; bytes are shown,
+not just a percentage; staging folders and the orphaned `.cmd` carry the
+`mw-update-` prefix and anything over a day old is swept on every check; `rd /s
+/q` is only ever written for a folder whose name carries that prefix; and
+`openExternal` is reachable only through `update:openLink`, which re-checks the
+URL against this repo's own prefix in main.
+
+**Tested for real** (`UPDATE_BUTTON.md` §8, the only test that means anything): a
+packaged build claiming 0.0.1 was copied to a scratch folder and driven through
+About → Check → Update against the live `v0.1.2` release. The progress bar moved
+in bytes, the app closed and came back on its own, the exe went from `0.0.1.0` to
+`0.1.2.0`, `update.log` read `update applied` **2.3 seconds** after `applying` —
+robocopy skipped the ~180 MB of unchanged ffmpeg binaries — and `%TEMP%` was left
+holding only the `.cmd`, as expected. The dev-run refusal, the already-latest
+reply and the asset picker were exercised separately.
+
+---
+
+## D-041 — A new text object is `pendingText`, not a document object
+
+**Decision**: `placeText` no longer pushes into `doc.objects`. The object lives
+in `store.pendingText` while the editor is open, and lands in the document as a
+single `Add text` entry only when the editor commits with content. Cancelling
+writes nothing at all.
+
+**Why**: placing wrote one undo entry and committing wrote a second, so one text
+insertion cost two undo steps — a line drawn before a text needed three presses
+to come back. Worse, a text that was placed and clicked away from *also* left a
+pair of entries (the add, then a remove labelled `Add text`), so Ctrl+Z appeared
+to do nothing: it was faithfully un-removing an empty, invisible, unselectable
+object.
+
+The framing that fixes both is that **an in-progress text is not yet an edit**.
+Nothing that is not in the document can be half-undone.
+
+Nothing else needs to see the object while it is being edited. §10 already
+requires the Konva node, the selection outline and the transform handles to be
+hidden — the editor is the only box on screen — and any control that could touch
+the object first has to take focus off the textarea, which commits. So the
+document is not missing anything during the edit; it simply does not have an
+object yet.
+
+`setEditingText` drops the pending slot whenever the id stops matching, so an
+uncommitted object cannot outlive its editor by any route — commit, `Esc`, or the
+global `Escape` shortcut in `keyboard.ts` that closes the editor without going
+through `commit` at all.
+
+**Emptying an existing text** is still one entry, now labelled `Delete text`
+rather than `Add text`, which is what it does.
+
+## D-042 — The click places the text box's left edge
+
+**Decision**: `placeText` sets `x = click.x + boxWidth / 2`, so the box's left
+edge lands on the pointer rather than its centre.
+
+**Why**: `BaseObject.x` is a centre (§5), and writing the click straight into it
+put the caret half a box — 160 px — to the left of where the user clicked. Every
+other program places a caret where the pointer is and runs the text to the right
+of it. The vertical is unchanged: `y` is still the click, so the first line sits
+centred on it.

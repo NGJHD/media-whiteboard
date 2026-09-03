@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { applyPatches, enablePatches, produce, produceWithPatches, type Patch } from 'immer';
-import type { Doc, LayerId, Rect, SceneObject } from '../../shared/doc';
+import type { Doc, LayerId, Rect, SceneObject, TextObject } from '../../shared/doc';
 import { createEmptyDoc } from '../../shared/doc';
 import { PROJECT_SCHEMA_VERSION, PROJECT_EXTENSION } from '../../shared/ipc';
 import { computeDirtyRect, replay } from '../paint/paintBuffer';
@@ -65,6 +65,19 @@ interface State {
   fonts: string[];
   /** The text object being edited in place, if any (§10). */
   editingTextId: LayerId | null;
+  /**
+   * A text object that has been placed but not yet committed (§10).
+   *
+   * It is deliberately **not** in `doc.objects`: an in-progress text is not yet
+   * an edit, and putting it in the document is what made a cancelled text leave
+   * an undo entry behind and a real one take two. It lands in the document as a
+   * single 'Add text' entry when the editor commits with content, and simply
+   * disappears when it does not.
+   *
+   * Nothing else can reach it while it exists — the editor holds focus, and
+   * anything that would touch the object blurs the textarea and commits first.
+   */
+  pendingText: TextObject | null;
   /** Path of the open project, so Ctrl+S can suggest it again (§13). */
   projectPath: string | null;
   /** Background decodes still running (§7). Empty when nothing is loading. */
@@ -121,6 +134,8 @@ interface State {
   dismissToast(id: number): void;
   setFonts(fonts: string[]): void;
   setEditingText(id: LayerId | null): void;
+  /** Opens the editor on a text object that is not in the document yet (§10). */
+  setPendingText(object: TextObject | null): void;
   saveProject(): Promise<void>;
   openProject(): Promise<void>;
 
@@ -143,6 +158,7 @@ export const useStore = create<State>((set, get) => ({
   toasts: [],
   fonts: [],
   editingTextId: null,
+  pendingText: null,
   projectPath: null,
   imports: [],
   undoStack: [],
@@ -339,7 +355,16 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setEditingText(editingTextId) {
-    set({ editingTextId, revision: get().revision + 1 });
+    // A pending text belongs to the editor that was open. Closing that editor by
+    // any route — commit, Esc, the global shortcut in keyboard.ts — drops it, so
+    // an uncommitted object can never outlive its own editor.
+    const { pendingText } = get();
+    const stillPending = pendingText && pendingText.id === editingTextId ? pendingText : null;
+    set({ editingTextId, pendingText: stillPending, revision: get().revision + 1 });
+  },
+
+  setPendingText(pendingText) {
+    set({ pendingText, revision: get().revision + 1 });
   },
 
   /**
@@ -405,6 +430,8 @@ export const useStore = create<State>((set, get) => ({
       doc: loaded,
       projectPath: result.path,
       selection: [],
+      editingTextId: null,
+      pendingText: null,
       undoStack: [],
       redoStack: [],
       revision: get().revision + 1,
