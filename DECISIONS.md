@@ -735,3 +735,52 @@ step that gets forgotten or done differently each time.
 `zip` here is an archive of the `dir` output, not an installer, so §15's actual
 constraint — no NSIS, no MSI, no auto-updater — is untouched. `artifactName`
 drops the space out of the product name so the asset survives being a URL.
+
+---
+
+## D-037 — Corner handles only, and resizing snaps
+
+**Decision**: the Transformer offers four corner anchors and nothing else, for
+every kind of object and for group selections. Resizing snaps the dragged corner
+to the same targets a move snaps to, implemented in `boundBoxFunc`.
+
+**Why the corners**: an edge handle can only change one dimension, so its whole
+purpose is to distort. For media that is distortion against the source's own
+aspect ratio, which is almost never intended and easy to do by accident when the
+handle sits right next to the one you wanted. Corners with `keepRatio` hold the
+ratio by default; `Shift` remains the deliberate route to a stretch (§10).
+
+Text keeps corners too. Its resize only ever uses the horizontal component
+(§10), so a corner drag does exactly what the old middle-left/right handles did,
+with two fewer things on screen.
+
+**Why `boundBoxFunc`**: the handles have to end up on the snapped rectangle, not
+trailing the pointer — the same requirement that made a snapped *drag* write its
+position back to the node. `boundBoxFunc` is Konva's supported hook for adjusting
+the box mid-gesture, so the box, the handles and the model all come out of one
+number. This is not the mistake D-021 describes: that was resetting the node's
+scale behind the Transformer's back, whereas this is the seam it provides.
+
+**One axis, not two.** A resize pins the corner opposite the handle, so the thing
+to align is the dragged corner rather than a whole box. Under aspect lock only
+one axis can be honoured — the other follows from the ratio — so `snapPoint`
+reports each axis separately with its distance, and the nearer one wins.
+
+Restricted to rotation 0. The guides are axis-aligned; a rotated box has no edge
+that meaningfully lines up with them.
+
+---
+
+## D-038 — Media size is typed against the source ratio
+
+**Decision**: selecting a single media layer shows its source dimensions and
+editable width/height, locked to the **source** aspect ratio — not to the
+layer's current one.
+
+**Why the source**: if a layer has somehow been stretched, typing a width should
+put it back on the ratio rather than preserve the distortion. Locking to the
+current ratio would make the field a way to keep a mistake.
+
+Per-object, so a multi-selection of media shows nothing: two layers at different
+sizes have no shared answer, and applying one to both is a resize nobody asked
+for. This is why `hasOptions` special-cases media on selection count.

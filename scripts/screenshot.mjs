@@ -68,6 +68,12 @@ const cases = [
     setter.call(ta, ['Media Whiteboard', 'second line', 'third line'].join(String.fromCharCode(10)));
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   `],
+  // §9: a selected media layer shows its source size and aspect-locked W/H.
+  ['select-media', `
+    store.getState().setTool('select');
+    const media = store.getState().doc.objects.find((o) => o.kind === 'media');
+    store.getState().setSelection([media.id]);
+  `],
   // §9 placeholders: an empty document, and a layer whose frames have not
   // arrived. The pending layer is faked with a cache key that matches nothing,
   // because a real decode is over before a screenshot can catch it.

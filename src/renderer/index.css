@@ -117,6 +117,8 @@ input, select, textarea { user-select: text; }
 }
 
 .field.grow { flex: 1 1 auto; min-width: 90px; }
+/* Read-only context beside a control, not a control itself. */
+.field.muted-note { color: var(--muted); font-variant-numeric: tabular-nums; }
 .field .num { min-width: 26px; color: var(--text); font-variant-numeric: tabular-nums; }
 
 input[type='text'], input:not([type]), input[type='number'], select, textarea {

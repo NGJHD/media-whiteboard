@@ -4,7 +4,7 @@ import { WORLD_MAX, WORLD_MIN, objectBounds } from '../../shared/doc';
 import { clampObjectToWorld } from '../actions/objectActions';
 import { useStore, type ViewTransform } from '../state/store';
 import type { SnapGuide } from './overlay';
-import { selectionBounds, snapRect } from './snapping';
+import { selectionBounds, snapPoint, snapRect } from './snapping';
 
 /**
  * Select-tool interaction (CLAUDE.md §10, §11).
@@ -25,6 +25,16 @@ import { selectionBounds, snapRect } from './snapping';
 const ROTATION_SNAPS = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180,
   195, 210, 225, 240, 255, 270, 285, 300, 315, 330, 345];
 
+/**
+ * §10: corners only, never edges.
+ *
+ * An edge handle can only change one dimension, which means its whole purpose is
+ * to distort — and for media that distortion is against the source's own aspect
+ * ratio, which is almost never what was wanted. Corners with `keepRatio` hold
+ * the ratio by default, and Shift is still there for a deliberate stretch.
+ */
+const CORNER_ANCHORS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+
 export interface InteractionHandle {
   layer: Konva.Layer;
   sync(): void;
@@ -37,6 +47,8 @@ export interface InteractionHandle {
    * §11's snapping requires and what nothing else can observe.
    */
   proxyPosition(id: LayerId): { x: number; y: number } | null;
+  /** Handles currently offered on the selection. Corners only, per §10. */
+  enabledAnchors(): string[];
   destroy(): void;
 }
 
@@ -207,14 +219,9 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
       }
 
       transformer.rotateEnabled(true);
-      // §10: text resize changes boxWidth and reflows; glyph size is only ever
-      // changed by the font-size control, so vertical handles would be a lie.
-      transformer.enabledAnchors(
-        obj.kind === 'text'
-          ? ['middle-left', 'middle-right', 'top-left', 'top-right', 'bottom-left', 'bottom-right']
-          : ['top-left', 'top-center', 'top-right', 'middle-left', 'middle-right',
-             'bottom-left', 'bottom-center', 'bottom-right'],
-      );
+      transformer.enabledAnchors(CORNER_ANCHORS);
+      // §10: text resize changes boxWidth and reflows, so a corner drag applies
+      // only its horizontal component and locking the ratio would be a lie.
       transformer.keepRatio(obj.kind !== 'text');
       transformer.nodes([node]);
       return;
@@ -244,7 +251,7 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
     groupBox.visible(true);
 
     transformer.rotateEnabled(false);
-    transformer.enabledAnchors(['top-left', 'top-right', 'bottom-left', 'bottom-right']);
+    transformer.enabledAnchors(CORNER_ANCHORS);
     // §10: Shift does *not* enable free distortion for a group. A non-uniform
     // scale on a rotated object needs a shear, which the model cannot represent.
     transformer.keepRatio(true);
@@ -490,17 +497,116 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
   /* World clamping on the handles                                          */
   /* ---------------------------------------------------------------------- */
 
+  interface Box {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+  }
+
+  /**
+   * §11 snapping during a resize.
+   *
+   * Done here rather than in the `transform` handler for the same reason the
+   * drag writes its snapped position back to the node: the handles have to end
+   * up on the snapped rectangle too. `boundBoxFunc` is Konva's supported hook
+   * for adjusting the box mid-gesture, so the box, the handles and the model all
+   * come out of one number — unlike D-021, this is not fighting the Transformer,
+   * it is the seam it provides.
+   *
+   * A resize pins the corner opposite the handle and moves the dragged one, so
+   * what gets aligned is that corner. Under `keepRatio` only one axis can be
+   * honoured — the other follows from the ratio — so the nearer one wins.
+   *
+   * Only at rotation 0: the guides are axis-aligned, and a rotated box has no
+   * edge that meaningfully lines up with them.
+   */
+  function snapResize(box: Box): Box {
+    const anchor = transformer.getActiveAnchor();
+    const v = view();
+    if (!anchor || ctrlHeld || v.scale <= 0 || Math.abs(box.rotation) > 1e-6) return box;
+
+    const holdsLeft = anchor.includes('left');
+    const holdsRight = anchor.includes('right');
+    const holdsTop = anchor.includes('top');
+    const holdsBottom = anchor.includes('bottom');
+    // Corner handles only (§10), so anything else is the rotater.
+    if (!(holdsLeft || holdsRight) || !(holdsTop || holdsBottom)) return box;
+
+    const left = (box.x - v.offsetX) / v.scale;
+    const top = (box.y - v.offsetY) / v.scale;
+    let width = box.width / v.scale;
+    let height = box.height / v.scale;
+    if (width <= 0 || height <= 0) return box;
+
+    const movingX = holdsLeft ? left : left + width;
+    const movingY = holdsTop ? top : top + height;
+    const anchorX = holdsLeft ? left + width : left;
+    const anchorY = holdsTop ? top + height : top;
+
+    const { doc, selection } = useStore.getState();
+    const snap = snapPoint(movingX, movingY, doc, selection, v.scale, true);
+
+    // Text resizes by width alone (§10); a horizontal guide would point at an
+    // edge the model is about to ignore.
+    const onlyText =
+      selection.length === 1 &&
+      doc.objects.find((o) => o.id === selection[0])?.kind === 'text';
+
+    const ratio = width / height;
+    const next: SnapGuide[] = [];
+
+    if (transformer.keepRatio()) {
+      const takeX =
+        snap.distanceX !== null && (snap.distanceY === null || snap.distanceX <= snap.distanceY);
+      if (takeX) {
+        width = Math.abs(movingX + snap.dx - anchorX);
+        height = width / ratio;
+        if (snap.guideX) next.push(snap.guideX);
+      } else if (snap.distanceY !== null) {
+        height = Math.abs(movingY + snap.dy - anchorY);
+        width = height * ratio;
+        if (snap.guideY) next.push(snap.guideY);
+      }
+    } else {
+      if (snap.distanceX !== null) {
+        width = Math.abs(movingX + snap.dx - anchorX);
+        if (snap.guideX) next.push(snap.guideX);
+      }
+      if (!onlyText && snap.distanceY !== null) {
+        height = Math.abs(movingY + snap.dy - anchorY);
+        if (snap.guideY) next.push(snap.guideY);
+      }
+    }
+
+    guides = next;
+    if (width < 1 || height < 1) return box;
+
+    const newLeft = holdsLeft ? anchorX - width : anchorX;
+    const newTop = holdsTop ? anchorY - height : anchorY;
+    return {
+      x: newLeft * v.scale + v.offsetX,
+      y: newTop * v.scale + v.offsetY,
+      width: width * v.scale,
+      height: height * v.scale,
+      rotation: box.rotation,
+    };
+  }
+
   // §4: dragging or resizing stops at the world boundary rather than crossing it.
   transformer.boundBoxFunc((oldBox, newBox) => {
     const v = view();
-    const worldLeft = (newBox.x - v.offsetX) / v.scale;
-    const worldTop = (newBox.y - v.offsetY) / v.scale;
-    const worldRight = worldLeft + newBox.width / v.scale;
-    const worldBottom = worldTop + newBox.height / v.scale;
+    const box = snapResize(newBox);
+
+    const worldLeft = (box.x - v.offsetX) / v.scale;
+    const worldTop = (box.y - v.offsetY) / v.scale;
+    const worldRight = worldLeft + box.width / v.scale;
+    const worldBottom = worldTop + box.height / v.scale;
 
     if (
-      newBox.width < 4 ||
-      newBox.height < 4 ||
+      box.width < 4 ||
+      box.height < 4 ||
       worldLeft < WORLD_MIN ||
       worldTop < WORLD_MIN ||
       worldRight > WORLD_MAX ||
@@ -508,7 +614,7 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
     ) {
       return oldBox;
     }
-    return newBox;
+    return box;
   });
 
   return {
@@ -520,6 +626,7 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
       const node = proxies.get(id);
       return node ? { x: node.x(), y: node.y() } : null;
     },
+    enabledAnchors: () => (transformer.nodes().length > 0 ? transformer.enabledAnchors() : []),
     destroy() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKey);

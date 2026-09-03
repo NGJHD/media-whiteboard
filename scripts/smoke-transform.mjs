@@ -7,7 +7,9 @@
  * against ground its own last step moved, a snap that leaves the handles behind,
  * a click whose default action steals focus back a beat later.
  */
+import path from 'node:path';
 import { makeChecker, startHarness } from './smoke-lib.mjs';
+import { root } from './esbuild.config.mjs';
 
 const harness = await startHarness();
 const c = makeChecker();
@@ -321,6 +323,210 @@ console.log('=== right-click on empty canvas (§11) ===');
       'Delete', 'Bring Forward', 'Send Backward', 'Bring to Front', 'Send to Back',
     ]);
     c.check('and is selected by the right-click', result.onObject.selection, ['a']);
+  }
+}
+
+/* -- 6. Corners only, and they hold the aspect ratio (§10) ----------------- */
+
+console.log('');
+console.log('=== corner-only resize handles (§10) ===');
+{
+  const result = await harness.run(`
+    (async () => {
+      ${preamble}
+      s().apply('setup', (d) => {
+        d.canvasRect = { x: -400, y: -300, width: 800, height: 600 };
+        d.objects = [
+          shape('a', 0, 0, 200, 100),
+          { id: 't', kind: 'text', x: 250, y: 200, width: 200, height: 40,
+            rotation: 0, opacity: 1, text: 'hi', fontFamily: 'Segoe UI',
+            fontSize: 30, fontStyle: 'normal', color: '#fff',
+            outline: null, shadow: null, boxWidth: 200 },
+        ];
+      });
+      s().setTool('select');
+
+      s().setSelection(['a']);
+      await frame();
+      await frame();
+      const single = window.__mwAnchors();
+
+      s().setSelection(['t']);
+      await frame();
+      await frame();
+      const text = window.__mwAnchors();
+
+      s().setSelection(['a', 't']);
+      await frame();
+      await frame();
+      const group = window.__mwAnchors();
+
+      // And the ratio actually holds through a corner drag.
+      s().setSelection(['a']);
+      await frame();
+      await frame();
+      const scale = s().view.scale;
+      const corner = toScreen(100, 50);
+      send('mousedown', corner.x, corner.y);
+      await frame();
+      for (let i = 1; i <= 5; i += 1) {
+        send('mousemove', corner.x + 20 * i * scale, corner.y + 4 * i * scale);
+        await frame();
+      }
+      send('mouseup', corner.x + 100 * scale, corner.y + 20 * scale);
+      await frame();
+
+      const a = s().doc.objects.find((o) => o.id === 'a');
+      return {
+        ok: true,
+        single, text, group,
+        grew: a.width > 210,
+        ratio: Math.round((a.width / a.height) * 1000) / 1000,
+      };
+    })()
+  `);
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    const corners = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+    // An edge handle can only change one dimension, so its whole purpose is to
+    // distort — against the source's own aspect ratio, for media.
+    c.check('a single object offers corners only', result.single, corners);
+    c.check('so does text', result.text, corners);
+    c.check('so does a group', result.group, corners);
+    c.truthy('the drag actually resized', result.grew);
+    // Dragged 100 across and only 20 down; the ratio is what decides the rest.
+    c.check('the 2:1 ratio survived a lopsided drag', result.ratio, 2);
+  }
+}
+
+/* -- 7. Resizing snaps, and the handles come with it (§11) ----------------- */
+
+console.log('');
+console.log('=== resize snapping (§11) ===');
+{
+  const result = await harness.run(`
+    (async () => {
+      ${preamble}
+      s().apply('setup', (d) => {
+        d.canvasRect = { x: -400, y: -300, width: 800, height: 600 };
+        // 'b' sits with its left edge at x = 150; 'a' is grown towards it.
+        d.objects = [shape('a', 0, 0, 100, 100), shape('b', 200, 0, 100, 100)];
+      });
+      s().setTool('select');
+      s().setSelection(['a']);
+      await frame();
+      await frame();
+
+      const scale = s().view.scale;
+      const corner = toScreen(50, 50);
+      // Stop 4 world px short of b's left edge — inside the 8 screen px
+      // threshold, so the snap has to close the gap.
+      const target = toScreen(146, 146);
+
+      send('mousedown', corner.x, corner.y);
+      await frame();
+      send('mousemove', target.x, target.y);
+      await frame();
+
+      const a = s().doc.objects.find((o) => o.id === 'a');
+      const right = a.x + a.width / 2;
+      const box = window.__mwProxyRect('a');
+
+      send('mouseup', target.x, target.y);
+      await frame();
+
+      return {
+        ok: true,
+        right: Math.round(right * 1000) / 1000,
+        width: Math.round(a.width * 1000) / 1000,
+        height: Math.round(a.height * 1000) / 1000,
+        boxCentreX: box ? Math.round(((box.x - s().view.offsetX) / scale) * 1000) / 1000 : null,
+        objCentreX: Math.round(a.x * 1000) / 1000,
+      };
+    })()
+  `);
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    // Snapped from 146 onto b's left edge at 150, so the anchored corner at
+    // -50 gives a width of exactly 200 — and the ratio carries it to height.
+    c.check('the dragged edge landed on the target', result.right, 150);
+    c.check('width follows from the snapped corner', result.width, 200);
+    c.check('and height from the aspect ratio', result.height, 200);
+    c.check('the handles are on the snapped box', result.boxCentreX, result.objCentreX);
+  }
+}
+
+/* -- 8. Typed media size stays on the source ratio (§9) -------------------- */
+
+console.log('');
+console.log('=== media W/H fields (§9) ===');
+{
+  const fixture = JSON.stringify(path.join(root, 'test-fixtures', 'static.png'));
+  const result = await harness.run(`
+    (async () => {
+      ${preamble}
+      const { importFiles } = await import('/media/importMedia.ts');
+      await importFiles([${fixture}], { x: 0, y: 0 });
+      await window.__mwIdle();
+      const id = s().doc.objects[0].id;
+      s().setTool('select');
+      s().setSelection([id]);
+      await frame();
+      await new Promise((r) => setTimeout(r, 150));
+
+      const fields = [...document.querySelectorAll('.options input.dim')];
+      const note = document.querySelector('.options .muted-note');
+
+      // React owns these inputs, so a plain .value assignment is invisible to
+      // it — go through the native setter and let it hear the input event.
+      // Commit with Enter rather than a synthetic blur: React delegates onBlur
+      // from the focusout event, so a dispatched blur never reaches it.
+      // (No backticks in here — this whole script is a template literal.)
+      const type = (el, value) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+          .set.call(el, value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      };
+
+      const before = s().doc.objects[0];
+      type(fields[0], '320');
+      await new Promise((r) => setTimeout(r, 120));
+      const afterWidth = { ...s().doc.objects[0] };
+
+      type(fields[1], '90');
+      await new Promise((r) => setTimeout(r, 120));
+      const afterHeight = { ...s().doc.objects[0] };
+
+      return {
+        ok: true,
+        fieldCount: fields.length,
+        note: note ? note.textContent.trim() : null,
+        native: [before.nativeWidth, before.nativeHeight],
+        placed: [Math.round(before.width), Math.round(before.height)],
+        afterWidth: [Math.round(afterWidth.width), Math.round(afterWidth.height)],
+        afterHeight: [Math.round(afterHeight.width), Math.round(afterHeight.height)],
+      };
+    })()
+  `);
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.check('two size fields', result.fieldCount, 2);
+    c.check('the source size is shown', result.note, 'Source 640 × 360');
+    // §7 places a drop inside half the canvas: 640x360 inside 640x360 exactly.
+    c.check('placed at half the canvas', result.placed, [640, 360]);
+    // 640x360 is 16:9, so a typed width picks the height and vice versa.
+    c.check('typing a width sets the height', result.afterWidth, [320, 180]);
+    c.check('typing a height sets the width', result.afterHeight, [160, 90]);
   }
 }
 

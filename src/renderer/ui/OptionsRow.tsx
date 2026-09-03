@@ -1,5 +1,7 @@
-import type { SceneObject, ShapeObject, TextObject } from '../../shared/doc';
+import { useEffect, useState } from 'react';
+import type { MediaObject, SceneObject, ShapeObject, TextObject } from '../../shared/doc';
 import { clearPaint } from '../actions/canvasActions';
+import { clampObjectToWorld } from '../actions/objectActions';
 import { useStore, type Tool } from '../state/store';
 import { useToolDefaults } from '../state/toolDefaults';
 
@@ -40,10 +42,13 @@ export function OptionsRow() {
 export function hasOptions(tool: Tool, selected: SceneObject[]): boolean {
   if (tool !== 'select') return true;
   if (selected.length === 0) return false;
+  // A mix of kinds has nothing in common (§9).
   const kinds = new Set(selected.map((o) => o.kind));
-  // Media has no editable property of its own, and a mix of kinds has nothing
-  // in common (§9).
-  return kinds.size === 1 && selected[0]!.kind !== 'media';
+  if (kinds.size !== 1) return false;
+  // Media's only controls are its own size, which is per-object — two selected
+  // at once have no shared answer.
+  if (selected[0]!.kind === 'media') return selected.length === 1;
+  return true;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -227,6 +232,14 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
 
   const kind = objects[0]!.kind;
 
+  if (kind === 'media') {
+    return (
+      <div className="options">
+        <MediaSize object={objects[0] as MediaObject} />
+      </div>
+    );
+  }
+
   if (kind === 'shape') {
     const shapes = objects as ShapeObject[];
     const stroke = shared(shapes, (o) => (o as ShapeObject).stroke);
@@ -394,6 +407,93 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
         Shadow
       </label>
     </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Media size (§9)                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The layer's size on the canvas, alongside the size of the source it came from.
+ *
+ * Aspect-locked to the **source**, not to whatever the layer happens to be now:
+ * typing a width sets the height that keeps the media undistorted, which is the
+ * point of being able to type it. Matches the corner-only handles (§10) — there
+ * is deliberately no way to distort media by accident.
+ */
+function MediaSize({ object }: { object: MediaObject }) {
+  const apply = useStore((s) => s.apply);
+  const ratio = object.nativeWidth / object.nativeHeight;
+
+  const [width, setWidth] = useState(String(Math.round(object.width)));
+  const [height, setHeight] = useState(String(Math.round(object.height)));
+
+  useEffect(() => {
+    setWidth(String(Math.round(object.width)));
+    setHeight(String(Math.round(object.height)));
+  }, [object.id, object.width, object.height]);
+
+  function reset() {
+    setWidth(String(Math.round(object.width)));
+    setHeight(String(Math.round(object.height)));
+  }
+
+  function commit(axis: 'width' | 'height') {
+    const typed = Number(axis === 'width' ? width : height);
+    if (!Number.isFinite(typed) || typed < 1) {
+      reset();
+      return;
+    }
+
+    const next =
+      axis === 'width'
+        ? { width: typed, height: typed / ratio }
+        : { width: typed * ratio, height: typed };
+
+    apply('Resize media', (draft) => {
+      const target = draft.objects.find((o) => o.id === object.id);
+      if (target?.kind !== 'media') return;
+      target.width = next.width;
+      target.height = next.height;
+      // §4: the layer stays inside the world however it was typed.
+      clampObjectToWorld(target);
+    });
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>, axis: 'width' | 'height') {
+    if (e.key === 'Enter') commit(axis);
+    if (e.key === 'Escape') reset();
+  }
+
+  return (
+    <>
+      <span className="field muted-note">
+        Source {object.nativeWidth} × {object.nativeHeight}
+      </span>
+      <label className="field">
+        W
+        <input
+          className="dim"
+          value={width}
+          inputMode="numeric"
+          onChange={(e) => setWidth(e.target.value)}
+          onBlur={() => commit('width')}
+          onKeyDown={(e) => onKeyDown(e, 'width')}
+        />
+      </label>
+      <label className="field">
+        H
+        <input
+          className="dim"
+          value={height}
+          inputMode="numeric"
+          onChange={(e) => setHeight(e.target.value)}
+          onBlur={() => commit('height')}
+          onKeyDown={(e) => onKeyDown(e, 'height')}
+        />
+      </label>
+    </>
   );
 }
 

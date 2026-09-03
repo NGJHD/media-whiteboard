@@ -74,6 +74,7 @@ export function Viewport() {
     if (import.meta.env.DEV) {
       const hooks = window as unknown as Record<string, unknown>;
       hooks.__mwProxyRect = (id: string) => interaction.proxyPosition(id);
+      hooks.__mwAnchors = () => interaction.enabledAnchors();
       // What the overlay is currently saying. The §9 placeholders are Konva
       // text on a chrome layer, so there is no DOM for a test to read.
       hooks.__mwOverlayText = () =>

@@ -485,10 +485,16 @@ Per-kind properties, matching the fields in §5:
 
 | Selection | Controls |
 |---|---|
-| Media | *(none — the section is empty)* |
+| Media | source size (read-only), width, height |
 | Shape | stroke color, stroke width, fill color, No fill |
 | Text | font family, size, bold, italic, color, outline, shadow |
 | Mixed kinds | *(none — the section is empty)* |
+
+Media's width and height are **locked to the source aspect ratio**: typing one
+sets the other to whatever keeps the layer undistorted. That is the point of
+being able to type them, and it matches the corner-only handles — there is
+deliberately no way to distort media by accident. They are per-object, so a
+multi-selection of media shows nothing.
 
 `opacity` stays in the model (§5) and is honoured by `buildScene`, but **it has no
 UI**. There is no opacity control anywhere.
@@ -523,7 +529,11 @@ output (§3).
 - **Multi-select**: rubber-band drag on empty space; `Shift`+click to add/remove;
   `Ctrl+A` selects all.
 - Konva `Transformer` handles for move / resize / rotate.
-- **Resize is aspect-locked by default**; hold `Shift` to distort freely.
+- **Corner handles only — never edge handles.** An edge handle can only change
+  one dimension, so its entire purpose is to distort, and for media that is
+  against the source's own aspect ratio. Four corners plus the rotation handle.
+- **Resize is aspect-locked by default**; hold `Shift` to distort freely. That
+  is the one deliberate route to a stretched layer.
 - **Rotation snaps to 15°** while `Shift` is held.
 - **Multi-select supports move, delete, z-order, and resize — but not rotation.**
   Show a bounding box with corner resize handles only (no rotation handle, no edge
@@ -579,10 +589,10 @@ join. Interpolate between pointer events so fast strokes don't gap.
   text upward the moment the editor closed.
 - Options: system font family, size, style (bold/italic), color, optional outline,
   optional shadow.
-- **Resize reflows**: dragging a horizontal handle changes `boxWidth` and the text
-  re-wraps; height is always auto-computed from the wrapped result. Vertical and corner
-  handles only apply their horizontal component. Glyph size is changed only via the
-  font-size control, never by dragging.
+- **Resize reflows**: dragging a corner changes `boxWidth` and the text re-wraps;
+  height is always auto-computed from the wrapped result, so only the horizontal
+  component of the drag is used. Glyph size is changed only via the font-size
+  control, never by dragging.
 - Enumerate system fonts via `queryLocalFonts()` where available, else a `document.fonts`
   probe list. On project load, if a referenced font is missing, warn and fall back to
   the default font.
@@ -604,6 +614,14 @@ join. Interpolate between pointer events so fast strokes don't gap.
 - Snap targets: other objects' left / center-x / right and top / center-y / bottom,
   **plus** `canvasRect`'s edges and center.
 - Show a thin guide line for each active snap while dragging or resizing.
+- **Resizing snaps too**, not just moving. A resize pins the corner opposite the
+  handle and moves the dragged one, so it is that corner which gets aligned.
+  Under aspect lock only one axis can be honoured — the other follows from the
+  ratio — so the nearer one wins. Only at rotation 0: the guides are
+  axis-aligned and a rotated box has no edge that lines up with them.
+  Do this through the Transformer's `boundBoxFunc`, which is the seam Konva
+  provides for adjusting the box mid-gesture; anything else leaves the handles
+  on the unsnapped rectangle.
 - **The transform handles snap with the object.** The snapped position and the
   pointer differ by up to the threshold; the box, the handles and the object must
   all end up on the same rectangle, or the handles visibly lag the thing they

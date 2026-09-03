@@ -48,16 +48,16 @@ function best(
   moving: Candidate[],
   targets: number[],
   threshold: number,
-): { delta: number; guide: number } | null {
+): { delta: number; guide: number; distance: number } | null {
   let bestDistance = threshold;
-  let result: { delta: number; guide: number } | null = null;
+  let result: { delta: number; guide: number; distance: number } | null = null;
 
   for (const candidate of moving) {
     for (const target of targets) {
       const distance = Math.abs(candidate.position - target);
       if (distance < bestDistance) {
         bestDistance = distance;
-        result = { delta: target - candidate.position, guide: target };
+        result = { delta: target - candidate.position, guide: target, distance };
       }
     }
   }
@@ -132,4 +132,63 @@ export function selectionBounds(doc: Doc, ids: LayerId[]): Rect | null {
     rect.height = bottom - rect.y;
   }
   return rect;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Point snapping — for the corner being dragged during a resize (§11)         */
+/* -------------------------------------------------------------------------- */
+
+export interface PointSnap {
+  dx: number;
+  dy: number;
+  /** World distance to the snapped target, or null when that axis did not snap. */
+  distanceX: number | null;
+  distanceY: number | null;
+  guideX: SnapGuide | null;
+  guideY: SnapGuide | null;
+}
+
+const NO_SNAP: PointSnap = {
+  dx: 0,
+  dy: 0,
+  distanceX: null,
+  distanceY: null,
+  guideX: null,
+  guideY: null,
+};
+
+/**
+ * Snaps a single point to the same targets a moving rect uses (§11).
+ *
+ * A resize pins one corner and moves the opposite one, so the thing to align is
+ * that corner rather than a whole box. The two axes are reported separately
+ * because an aspect-locked resize can only honour one of them — the other
+ * follows from the ratio — and it should be the nearer.
+ */
+export function snapPoint(
+  x: number,
+  y: number,
+  doc: Doc,
+  exclude: LayerId[],
+  viewScale: number,
+  enabled: boolean,
+): PointSnap {
+  if (!enabled || viewScale <= 0) return NO_SNAP;
+
+  const threshold = THRESHOLD_SCREEN_PX / viewScale;
+  const vertical = best([{ position: x, edge: 'start' }], verticalTargets(doc, exclude), threshold);
+  const horizontal = best(
+    [{ position: y, edge: 'start' }],
+    horizontalTargets(doc, exclude),
+    threshold,
+  );
+
+  return {
+    dx: vertical?.delta ?? 0,
+    dy: horizontal?.delta ?? 0,
+    distanceX: vertical?.distance ?? null,
+    distanceY: horizontal?.distance ?? null,
+    guideX: vertical ? { orientation: 'v', position: vertical.guide } : null,
+    guideY: horizontal ? { orientation: 'h', position: horizontal.guide } : null,
+  };
 }
