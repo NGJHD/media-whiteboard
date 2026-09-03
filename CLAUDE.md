@@ -291,17 +291,23 @@ into the entry and let `createImageBitmap` do the work. Encoding it first buys a
 different container for the slowest step in the whole import.
 
 **Animated layers are previewed from reduced-resolution proxy frames.** A second
-output on the same decode pass writes each frame again scaled to a **320 px short
-side**, into `<entry>/proxy/`. The preview draws those; **export reads the native
-frames and never sees a proxy**. This is the only substitution the preview is
-allowed to make, and it is resolution only — same node, same geometry, same
-order, so §3's single construction path is intact.
+output on the same decode pass writes each frame again, scaled so its **short
+side** is `PREVIEW_PROXY_SHORT_SIDE` (currently **240 px**), into
+`<entry>/proxy/`. The preview draws those; **export reads the native frames and
+never sees a proxy**. This is the only substitution the preview is allowed to
+make, and it is resolution only — same node, same geometry, same order, so §3's
+single construction path is intact.
 
 Why it is needed: a 17 s 1080x2520 clip is ~11 GB of decoded bitmaps against a
-512 MB budget, so nearly every preview frame is a cache miss, and a native frame
-costs ~15 ms to decode — nowhere near enough for 60 fps. The proxy is ~54 KB on
-disk and ~1 ms to decode, so misses stop mattering. The second output costs about
-13% of the decode (8.4 s to 9.5 s on that clip) and about 5% more disk.
+512 MB budget, so nearly every preview frame missed, and decoding a native frame
+is nowhere near fast enough for 60 fps. With proxies the same clip holds a 100%
+hit rate in 235 MB. The second output costs about **19%** of the decode (8.5 s to
+10.2 s on that clip) and about **13%** more disk.
+
+`PREVIEW_PROXY_SHORT_SIDE` is a tuning knob. Lower is snappier and softer; the
+measured trade at 240 against 320 is in `shared/doc.ts`. Changing it must
+invalidate entries built at the old size, so `meta.json` records what they were
+written at.
 
 Stills do not get proxies. A still decodes once and is then drawn every frame for
 free, so there is no churn to spare and softening it would be a pure loss. Nor do
@@ -770,7 +776,8 @@ Every one of these is a toast plus a no-op — never a crash, never a silent fai
 
 ## 15. Packaging
 
-- `electron-builder` with the `dir` target only. No NSIS, no MSI, no auto-updater.
+- `electron-builder` with the `dir` and `zip` targets only. No NSIS, no MSI, no
+  auto-updater — `zip` is an archive of the `dir` output, not an installer.
 - Ship `ffmpeg.exe` and `ffprobe.exe` in `resources/bin/`, marked as
   `extraResources` and **unpacked** (they must exist as real files on disk).
 - Resolve their paths via `process.resourcesPath` in production and a local path in

@@ -580,12 +580,13 @@ returns from that handler early, so the contextmenu handler has to do it itself.
 
 ---
 
-## D-030 — The preview draws animated layers from 320 px proxies
+## D-030 — The preview draws animated layers from reduced-size proxies
 
 **Decision**: the decode writes each animated frame twice — native into the entry
-directory, and again scaled to a **320 px short side** into `<entry>/proxy/`.
-The preview draws the proxies; export reads the native frames and never sees a
-proxy. Stills and sources whose short side is under 640 px get none.
+directory, and again scaled so its short side is `PREVIEW_PROXY_SHORT_SIDE`
+(**240 px**) into `<entry>/proxy/`. The preview draws the proxies; export reads
+the native frames and never sees a proxy. Stills, and sources whose short side is
+under twice the target, get none.
 
 **Why**: the preview of a large clip could not keep up. A 17 s 1080x2520 clip is
 ~11 GB of decoded bitmaps against a 512 MB budget, so only ~49 of its 1020
@@ -602,13 +603,26 @@ Measured on that clip, cold cache, before and after:
 | time to appear on canvas | 0.72 s | 0.43 s |
 | full decode | 10.7 s | 11.0 s |
 
-A proxy frame is ~54 KB on disk and ~1 ms to decode, so a miss stops mattering
-even when one happens.
+A proxy frame is ~126 KB on disk against ~1 MB for the native one, and cheap
+enough to decode that a miss stops mattering when one happens.
+
+**The size is a knob, and 240 is where it sits.** Measured on the same clip:
+
+| short side | resident | hit rate | frame gap p50 / p95 / p99 |
+|---|---|---|---|
+| 320 | 457 frames, 437 MB | 100% | 16.8 / 21.6 / 27.9 ms |
+| 240 | 438 frames, 235 MB | 100% | 16.7 / 18.8 / 20.3 ms |
+
+Both hold 60 fps at the median, so the gain is entirely in the tail — the worst
+frame goes from 28 ms to 21 ms — plus roughly half the memory. The cost is a
+softer preview, which at §7's half-canvas drop size is still legible down to
+small HUD text. `meta.json` records the size an entry was written at, so moving
+the knob re-decodes rather than quietly serving the old one.
 
 **One pass, two outputs.** ffmpeg decodes the source once and scales it twice,
-which costs about 13% (8.4 s to 9.5 s on that clip) against roughly doubling it
-by running a second command. `-progress` still counts source frames, so the bar
-is unaffected.
+which costs about 19% (8.5 s to 10.2 s on that clip, and 13% more disk) against
+roughly doubling it by running a second command. `-progress` still counts source
+frames, so the bar is unaffected.
 
 **The scale targets the short side**, whichever it is: a portrait clip's short
 side is its width and a landscape clip's is its height, so a fixed `-1:320`
@@ -689,3 +703,35 @@ worse than saying nothing.
 character class in editing — so on the only platform this app targets, neither
 split anything. The import progress bar had been labelling every job with a full
 absolute path. Two copies of a three-line function is how that happens twice.
+
+---
+
+## D-035 — The proxy size is recorded in cache metadata
+
+**Decision**: `meta.json` stores `proxyShortSide`, and an entry whose value
+disagrees with `PREVIEW_PROXY_SHORT_SIDE` is treated as a cache miss.
+
+**Why**: it is a tuning knob, and the first thing anyone does with a knob is turn
+it. Without this, changing the constant left every already-decoded source
+serving proxies at the old size — so the change appears to do nothing, or worse,
+appears to do something on new files only. A knob that quietly keeps serving the
+previous value is worse than no knob.
+
+Recomputing the expected size from the same shared rule and comparing is enough;
+there is no need to measure the files.
+
+---
+
+## D-036 — Packaging emits the zip itself
+
+**Decision**: `electron-builder.yml` declares both `dir` and `zip` targets, and
+`npm run package` no longer passes `--dir`.
+
+**Why**: §15 asks for "a zip of the output folder" as the deliverable, but the
+`--dir` flag on the command line overrides the configured targets, so nothing
+ever produced one — the zip had to be made by hand, which is exactly the sort of
+step that gets forgotten or done differently each time.
+
+`zip` here is an archive of the `dir` output, not an installer, so §15's actual
+constraint — no NSIS, no MSI, no auto-updater — is untouched. `artifactName`
+drops the space out of the product name so the asset survives being a URL.

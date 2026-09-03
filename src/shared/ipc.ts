@@ -37,7 +37,7 @@ export interface FfmpegInfo {
  * written by an older build are re-decoded instead of silently serving stale
  * metadata. The cache key covers the *source file*, not the decoder.
  */
-export const MEDIA_META_VERSION = 5;
+export const MEDIA_META_VERSION = 6;
 
 /** Written as meta.json beside the decoded frames. */
 export interface MediaMeta {
@@ -56,6 +56,14 @@ export interface MediaMeta {
    * in the import (§7).
    */
   frameExt: string;
+  /**
+   * Short side the preview proxies were written at, or null when this entry has
+   * none (§7). Stored rather than recomputed so that changing
+   * `PREVIEW_PROXY_SHORT_SIDE` invalidates entries built at the old size — a
+   * tuning knob that quietly kept serving the previous value would be worse
+   * than no knob.
+   */
+  proxyShortSide: number | null;
   /**
    * False while the background decode is still running (§7). The object is
    * already placeable — only frame 0 exists on disk — and a `MediaProgress`

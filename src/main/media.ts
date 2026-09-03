@@ -312,9 +312,13 @@ async function readMeta(cacheDir: string, key: string): Promise<MediaMeta | null
     if (frames !== meta.frameCount) return null;
 
     // The proxy set is derived from the same rule the renderer uses, so an entry
-    // missing the proxies it should have would leave the preview with nothing
-    // to draw. Treat it as a miss.
-    if (previewProxySize(meta.nativeWidth, meta.nativeHeight, meta.frameCount)) {
+    // missing the proxies it should have — or holding them at a size the rule no
+    // longer asks for — would leave the preview drawing the wrong thing or
+    // nothing at all. Treat either as a miss.
+    const wanted = previewProxySize(meta.nativeWidth, meta.nativeHeight, meta.frameCount);
+    const wantedShortSide = wanted ? PREVIEW_PROXY_SHORT_SIDE : null;
+    if (meta.proxyShortSide !== wantedShortSide) return null;
+    if (wanted) {
       const proxies = await fsp.readdir(proxyDir(cacheDir, key)).catch(() => [] as string[]);
       if (proxies.filter((f) => f.endsWith(FRAME_EXTENSION)).length !== meta.frameCount) {
         return null;
@@ -417,8 +421,9 @@ async function decodeAll(
     path.join(tmp, `%06d${FRAME_EXTENSION}`),
     // A second output on the same pass rather than a second run: the source is
     // decoded once and scaled twice. Measured on a 17 s 1080x2520 clip this
-    // costs about 13% (8.4 s to 9.5 s) against decoding the whole file again.
-    // `-progress` still counts source frames, so the bar is unaffected.
+    // costs about 19% (8.5 s to 10.2 s) against roughly doubling it by running
+    // a second command. `-progress` still counts source frames, so the bar is
+    // unaffected.
     ...(proxy
       ? ['-vf', proxyScaleFilter(), ...frameEncoder(), path.join(tmp, PROXY_DIR, `%06d${FRAME_EXTENSION}`)]
       : []),
@@ -603,6 +608,7 @@ export async function importMedia({
       nativeWidth: info.width,
       nativeHeight: info.height,
       frameExt: FRAME_EXTENSION,
+      proxyShortSide: proxy ? PREVIEW_PROXY_SHORT_SIDE : null,
       complete: false,
       readyFrames: 1,
     },
@@ -697,6 +703,7 @@ async function finalise(
   info: ProbeInfo,
   frameExt: string,
 ): Promise<ImportResult> {
+  const proxy = previewProxySize(info.width, info.height, info.frameCount);
   const dir = entryDir(cacheDir, key);
 
   // ffmpeg decides how many frames actually came out; trust that over the probe.
@@ -720,6 +727,7 @@ async function finalise(
     nativeWidth: info.width,
     nativeHeight: info.height,
     frameExt,
+    proxyShortSide: proxy ? PREVIEW_PROXY_SHORT_SIDE : null,
     complete: true,
     readyFrames: files.length,
   };

@@ -20,3 +20,6 @@ Thumbs.db
 
 # ffmpeg download cache (checksum-verified, re-fetchable)
 resources/.download/
+
+# Local crib sheet for building and publishing, deliberately not shared.
+RELEASE_GUIDE.md

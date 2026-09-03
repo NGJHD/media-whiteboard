@@ -28,11 +28,18 @@ asar: true
 asarUnpack:
   - resources/bin/**
 
+# One asset, named without spaces so it survives a URL. (CLAUDE.md §15)
+artifactName: MediaWhiteboard-${version}-win-x64.${ext}
+
 win:
   # 512x512 PNG in buildResources; electron-builder compiles it into the exe.
   icon: build/icon.png
   target:
+    # `dir` is the portable folder §15 requires; `zip` is the deliverable §15
+    # asks for, and is an archive of that same folder — not an installer.
     - target: dir
+      arch: [x64]
+    - target: zip
       arch: [x64]
   executableName: MediaWhiteboard
   # No code signing: this is an unsigned portable build by design.

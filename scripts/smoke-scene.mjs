@@ -26,6 +26,17 @@ const BLACK = [0, 0, 0];
 const harness = await startHarness();
 const c = makeChecker();
 
+/**
+ * Read from the source rather than repeated here: this is a tuning knob (§7),
+ * and a test that pins last week's value is a test that has to be edited every
+ * time someone turns it.
+ */
+const proxyShortSide = Number(
+  /PREVIEW_PROXY_SHORT_SIDE = (\d+)/.exec(
+    fs.readFileSync(path.join(root, 'src', 'shared', 'doc.ts'), 'utf8'),
+  )[1],
+);
+
 /** Decodes an image to raw RGBA and returns a pixel reader. */
 function pixels(file, width, height) {
   const raw = execFileSync(
@@ -369,7 +380,11 @@ console.log('=== export ignores the preview proxies (§3, §7) ===');
     // ever picked up a proxy the output would silently lose detail, and no
     // geometry assertion would notice.
     c.check('export draws the native frame', info.exportBitmapWidth, info.native);
-    c.check('the preview draws a 320 px-short-side proxy', info.previewBitmapWidth, 320);
+    c.check(
+      `the preview draws a ${proxyShortSide} px-short-side proxy`,
+      info.previewBitmapWidth,
+      proxyShortSide,
+    );
     c.check('export asks for native frames', info.exportAsks, [false]);
     c.check('the preview asks for proxies', info.previewAsks, [true]);
   }

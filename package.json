@@ -12,7 +12,7 @@
     "build": "node scripts/build.mjs",
     "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
     "prepackage": "npm run fetch:ffmpeg && npm run build",
-    "package": "electron-builder --dir",
+    "package": "electron-builder",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.renderer.json",
     "smoke:export": "node scripts/smoke-export.mjs",
     "smoke:import": "node scripts/smoke-import.mjs",

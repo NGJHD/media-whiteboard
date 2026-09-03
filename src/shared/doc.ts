@@ -124,14 +124,26 @@ export const MAX_SOURCE_SECONDS = 30;
  *
  * The preview of an animated layer cannot afford its native frames. A 17 s
  * 1080x2520 clip is ~11 GB of decoded bitmaps against a 512 MB budget, so almost
- * every frame is a cache miss, and a full-size PNG costs ~15 ms to decode — far
- * too slow to sustain 60 fps. At this size the same frame is ~54 KB on disk,
- * ~1 ms to decode and ~1 MB resident.
+ * every frame missed the cache, and decoding a full-size PNG is far too slow to
+ * sustain 60 fps. Measured on that clip, cold cache:
+ *
+ * | short side | resident | hit rate | frame gap p50 / p99 |
+ * |---|---|---|---|
+ * | native | 49 frames | ~0% | — (the canvas could not keep up) |
+ * | 320 | 457 frames, 437 MB | 100% | 16.8 / 27.9 ms |
+ * | 240 | 438 frames, 235 MB | 100% | 16.7 / 20.3 ms |
+ *
+ * Both proxy sizes hold 60 fps at the median; the smaller one buys a tighter
+ * tail and roughly half the memory, at the cost of a softer preview. At 240 a
+ * proxy frame is ~126 KB on disk against ~1 MB for the native one.
+ *
+ * Changing this invalidates cached entries built at the old size — `meta.json`
+ * records what they were written at.
  *
  * Export never sees these. It reads the native frames, so output pixels are
  * unchanged; this is the one thing the preview is allowed to substitute (§3).
  */
-export const PREVIEW_PROXY_SHORT_SIDE = 320;
+export const PREVIEW_PROXY_SHORT_SIDE = 240;
 
 /**
  * The proxy size for a source, or null when it should be previewed at native
