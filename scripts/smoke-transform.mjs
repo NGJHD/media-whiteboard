@@ -37,6 +37,20 @@ const preamble = `
     }));
   }
 
+  const media = (id, x, y, w, h) => ({
+    id, kind: 'media', x, y, width: w, height: h, rotation: 0, opacity: 1,
+    sourcePath: 'C:/clips/a.mkv', cacheKey: 'abcdef0123456789',
+    frameCount: 60, frameDurationsMs: new Array(60).fill(16.7),
+    nativeWidth: w * 4, nativeHeight: h * 4,
+  });
+
+  // The interaction layer tracks Shift from window key events, not from the
+  // mouse event, so a resize needs both and a rotate needs this one.
+  const holdShift = (down) =>
+    window.dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', {
+      key: 'Shift', shiftKey: down, bubbles: true,
+    }));
+
   /** World -> viewport pixels, the same mapping the interaction layer uses. */
   const toScreen = (wx, wy) => {
     const v = s().view;
@@ -527,6 +541,125 @@ console.log('=== media W/H fields (§9) ===');
     // 640x360 is 16:9, so a typed width picks the height and vice versa.
     c.check('typing a width sets the height', result.afterWidth, [320, 180]);
     c.check('typing a height sets the width', result.afterHeight, [160, 90]);
+  }
+}
+
+/* -- 9. Shift never distorts media, but still snaps its rotation (§10) ------ */
+
+console.log('');
+console.log('=== Shift, aspect ratio and rotation (§10) ===');
+{
+  const result = await harness.run(`
+    (async () => {
+      ${preamble}
+
+      // Drags a corner with Shift down and reports the resulting w/h ratio.
+      const shiftResize = async (ids) => {
+        s().setSelection(ids);
+        await frame();
+        await frame();
+        const scale = s().view.scale;
+        const start = s().doc.objects.find((o) => o.id === ids[0]);
+        const corner = toScreen(start.x + start.width / 2, start.y + start.height / 2);
+
+        holdShift(true);
+        send('mousedown', corner.x, corner.y, { shiftKey: true });
+        await frame();
+        for (let i = 1; i <= 4; i += 1) {
+          send('mousemove', corner.x + 40 * i * scale, corner.y + 3 * i * scale, { shiftKey: true });
+          await frame();
+        }
+        send('mouseup', corner.x + 160 * scale, corner.y + 12 * scale, { shiftKey: true });
+        holdShift(false);
+        await frame();
+
+        const after = s().doc.objects.find((o) => o.id === ids[0]);
+        return {
+          ratio: Math.round((after.width / after.height) * 100) / 100,
+          grew: after.width > start.width + 20,
+        };
+      };
+
+      // Drags the rotation handle to an angle that is deliberately not a
+      // multiple of 15, and reports where it landed.
+      const rotate = async (id, withShift) => {
+        s().apply('reset rotation', (d) => {
+          const o = d.objects.find((x) => x.id === id);
+          o.rotation = 0;
+        });
+        s().setSelection([id]);
+        await frame();
+        await frame();
+
+        const obj = s().doc.objects.find((o) => o.id === id);
+        const scale = s().view.scale;
+        const centre = toScreen(obj.x, obj.y);
+        // Konva puts the rotater rotateAnchorOffset (50 px) above the top edge.
+        const radius = (obj.height / 2) * scale + 50;
+        const angle = (17 * Math.PI) / 180;
+
+        if (withShift) holdShift(true);
+        send('mousedown', centre.x, centre.y - radius, { shiftKey: withShift });
+        await frame();
+        for (let i = 1; i <= 3; i += 1) {
+          const a = (angle * i) / 3;
+          send('mousemove', centre.x + radius * Math.sin(a), centre.y - radius * Math.cos(a),
+            { shiftKey: withShift });
+          await frame();
+        }
+        send('mouseup', centre.x + radius * Math.sin(angle), centre.y - radius * Math.cos(angle),
+          { shiftKey: withShift });
+        if (withShift) holdShift(false);
+        await frame();
+
+        return Math.round(s().doc.objects.find((o) => o.id === id).rotation * 100) / 100;
+      };
+
+      s().apply('setup', (d) => {
+        d.canvasRect = { x: -400, y: -300, width: 800, height: 600 };
+        d.objects = [
+          media('m', 0, 0, 200, 100),
+          shape('r', 0, 0, 200, 100),
+          media('m2', 0, 0, 200, 100),
+          shape('r2', 250, 200, 60, 60),
+        ];
+      });
+      s().setTool('select');
+
+      const mediaResize = await shiftResize(['m']);
+      const shapeResize = await shiftResize(['r']);
+      const groupResize = await shiftResize(['m2', 'r2']);
+
+      const snapped = await rotate('m', true);
+      const free = await rotate('m', false);
+
+      return { ok: true, mediaResize, shapeResize, groupResize, snapped, free };
+    })()
+  `);
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.truthy('the media drag actually resized', result.mediaResize.grew);
+    // A source ratio is never right to stretch against, so no gesture does.
+    c.check('Shift does not distort media', result.mediaResize.ratio, 2);
+    // Shapes keep the §10 escape hatch: they have no source to be wrong about.
+    c.truthy(
+      'Shift still distorts a shape',
+      result.shapeResize.ratio !== 2,
+      `ratio ${result.shapeResize.ratio}`,
+    );
+    // §10 said this already; the shared transformer had been ignoring it.
+    c.check('Shift does not distort a group', result.groupResize.ratio, 2);
+
+    c.truthy('the rotation handle rotated the layer', result.snapped !== 0);
+    c.check('Shift snaps rotation to 15 degrees', result.snapped % 15, 0);
+    c.truthy(
+      'and without Shift it does not snap',
+      result.free !== 0 && result.free % 15 !== 0,
+      `${result.free} degrees`,
+    );
   }
 }
 

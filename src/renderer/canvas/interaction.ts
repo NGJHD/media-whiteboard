@@ -69,9 +69,11 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
   layer.add(groupBox);
 
   const transformer = new Konva.Transformer({
-    // §10: aspect-locked by default, Shift frees it.
+    // §10: aspect-locked by default. Whether Shift frees it is decided per
+    // selection in updateTransformer; 'none' is the safe default, because it
+    // means Shift cannot reach the resize at all.
     keepRatio: true,
-    shiftBehavior: 'inverted',
+    shiftBehavior: 'none',
     rotationSnaps: [],
     borderStroke: '#6ea8fe',
     anchorStroke: '#6ea8fe',
@@ -223,6 +225,14 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
       // §10: text resize changes boxWidth and reflows, so a corner drag applies
       // only its horizontal component and locking the ratio would be a lie.
       transformer.keepRatio(obj.kind !== 'text');
+      // §10: Shift frees the aspect ratio for shapes, and only for shapes. A
+      // media layer has a source ratio that stretching is always wrong against,
+      // so there is deliberately no gesture that distorts one.
+      //
+      // This is only about the *resize*. Shift still snaps rotation to 15°
+      // everywhere — that runs through `rotationSnaps`, which Konva applies in
+      // a different branch entirely.
+      transformer.shiftBehavior(obj.kind === 'shape' ? 'inverted' : 'none');
       transformer.nodes([node]);
       return;
     }
@@ -255,6 +265,7 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
     // §10: Shift does *not* enable free distortion for a group. A non-uniform
     // scale on a rotated object needs a shear, which the model cannot represent.
     transformer.keepRatio(true);
+    transformer.shiftBehavior('none');
     transformer.nodes([groupBox]);
   }
 

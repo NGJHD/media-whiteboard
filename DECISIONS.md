@@ -784,3 +784,28 @@ current ratio would make the field a way to keep a mistake.
 Per-object, so a multi-selection of media shows nothing: two layers at different
 sizes have no shared answer, and applying one to both is a resize nobody asked
 for. This is why `hasOptions` special-cases media on selection count.
+
+---
+
+## D-039 — Shift frees the aspect ratio for shapes only
+
+**Decision**: `shiftBehavior` is set per selection — `'inverted'` for a shape,
+`'none'` for media, text and groups. The Transformer's default is `'none'`.
+
+**Why**: a media layer has a source aspect ratio, and stretching against it is
+always a mistake rather than a choice. Corner-only handles (D-037) stopped it
+happening by accident; this closes the deliberate route too, so there is now no
+gesture that distorts media. A shape has no source to be wrong about, so it keeps
+§10's escape hatch.
+
+This also makes the group case true. §10 has always said Shift does not enable
+free distortion for a group — a non-uniform scale on a rotated object needs a
+shear the model cannot represent — but `shiftBehavior` was set once on the shared
+Transformer as `'inverted'`, so holding Shift distorted a group anyway. The
+comment saying otherwise sat directly above `keepRatio(true)`.
+
+**Rotation is untouched.** Konva applies `rotationSnaps` in a different branch of
+`_handleMouseMove` than `shiftBehavior`, so Shift still snaps rotation to 15° for
+every kind, media included. Both behaviours are pinned by
+`scripts/smoke-transform.mjs`: with Shift the rotation lands on a multiple of 15,
+without it on 17.

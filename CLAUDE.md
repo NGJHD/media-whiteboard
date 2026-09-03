@@ -532,8 +532,12 @@ output (§3).
 - **Corner handles only — never edge handles.** An edge handle can only change
   one dimension, so its entire purpose is to distort, and for media that is
   against the source's own aspect ratio. Four corners plus the rotation handle.
-- **Resize is aspect-locked by default**; hold `Shift` to distort freely. That
-  is the one deliberate route to a stretched layer.
+- **Resize is aspect-locked.** `Shift` frees it **for shapes only**. A media
+  layer has a source aspect ratio that stretching is always wrong against, so no
+  gesture distorts one — not an edge handle, not `Shift`. A group cannot be
+  distorted either, for the reason in "Group resize" below.
+- `Shift` is about the **resize** only. It still snaps rotation to 15° for
+  everything, including media; that is a separate mechanism.
 - **Rotation snaps to 15°** while `Shift` is held.
 - **Multi-select supports move, delete, z-order, and resize — but not rotation.**
   Show a bounding box with corner resize handles only (no rotation handle, no edge
