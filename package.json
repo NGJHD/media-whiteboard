@@ -1,7 +1,7 @@
 {
   "name": "media-whiteboard",
   "productName": "Media Whiteboard",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Composite animated and static media onto a canvas and export an infinitely-looping animated WebP or GIF.",
   "license": "MIT",
   "private": true,
