@@ -74,14 +74,17 @@ export function App() {
 
     toast('info', `${from} is not available for this document — switched to ${to}.`);
 
-    // The new extension may collide with a file that is already there.
-    void window.api
-      .uniqueOutputPath(useStore.getState().doc.outputPath)
-      .then((unique) => {
-        useStore.getState().mutate((draft) => {
-          draft.outputPath = unique;
-        });
+    // The new extension may collide with a file that is already there. The
+    // document can move on during the IPC round trip — a second format
+    // change, or the user typing in the path field — so only write back if
+    // the path we asked about is still the one on screen.
+    const asked = useStore.getState().doc.outputPath;
+    void window.api.uniqueOutputPath(asked).then((unique) => {
+      if (useStore.getState().doc.outputPath !== asked) return;
+      useStore.getState().mutate((draft) => {
+        draft.outputPath = unique;
       });
+    });
   }, [format, isStatic, toast]);
 
   /**
