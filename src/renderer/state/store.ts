@@ -3,6 +3,7 @@ import { applyPatches, enablePatches, produce, produceWithPatches, type Patch } 
 import type { Doc, LayerId, Rect, SceneObject, TextObject } from '../../shared/doc';
 import { createEmptyDoc } from '../../shared/doc';
 import { PROJECT_SCHEMA_VERSION, PROJECT_EXTENSION } from '../../shared/ipc';
+import { EXTENSION_PATTERN } from '../../shared/formats';
 import { computeDirtyRect, replay } from '../paint/paintBuffer';
 
 enablePatches();
@@ -375,7 +376,7 @@ export const useStore = create<State>((set, get) => ({
     const state = get();
     const suggested =
       state.projectPath ??
-      state.doc.outputPath.replace(/\.(webp|gif)$/i, '') + `.${PROJECT_EXTENSION}`;
+      state.doc.outputPath.replace(EXTENSION_PATTERN, '') + `.${PROJECT_EXTENSION}`;
 
     try {
       const saved = await window.api.saveProject(

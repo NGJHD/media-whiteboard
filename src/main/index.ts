@@ -5,6 +5,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { isOwnRepoUrl } from '../shared/about';
+import { formatSpec } from '../shared/formats';
 import {
   PROJECT_EXTENSION,
   type AppInfo,
@@ -136,12 +137,12 @@ ipcMain.handle('app:getFfmpegInfo', async (): Promise<FfmpegInfo> => {
 ipcMain.handle(
   'dialog:chooseOutputPath',
   async (_e, defaultPath: string, format: OutputFormat): Promise<string | null> => {
+    const spec = formatSpec(format);
     const result = await dialog.showSaveDialog({
       defaultPath,
       filters: [
-        format === 'webp'
-          ? { name: 'Animated WebP', extensions: ['webp'] }
-          : { name: 'Animated GIF', extensions: ['gif'] },
+        { name: `${spec.label} (.${spec.extension})`, extensions: [spec.extension] },
+        { name: 'All files', extensions: ['*'] },
       ],
     });
     if (result.canceled || !result.filePath) return null;

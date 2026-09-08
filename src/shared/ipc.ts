@@ -142,7 +142,7 @@ export function frameUrl(cacheKey: string, index: number, proxy = false): string
   return `${FRAME_SCHEME}://${proxy ? 'proxy' : 'frame'}/${cacheKey}/${index}`;
 }
 
-export type OutputFormat = 'webp' | 'gif';
+export type OutputFormat = 'webp' | 'gif' | 'mp4' | 'png';
 export type Quality = 'low' | 'medium' | 'high';
 
 export interface EncodeRequest {

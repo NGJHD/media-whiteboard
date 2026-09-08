@@ -6,6 +6,8 @@
  * move when it changes (§4).
  */
 
+import type { OutputFormat } from './ipc';
+
 export type LayerId = string;
 
 export interface Rect {
@@ -91,7 +93,7 @@ export interface Doc {
   background: { transparent: boolean; color: string };
   outputFps: OutputFps;
   quality: 'low' | 'medium' | 'high';
-  format: 'webp' | 'gif';
+  format: OutputFormat;              // see shared/formats.ts
   outputPath: string;
   /** Array order is z-order; index 0 is the back. */
   objects: SceneObject[];

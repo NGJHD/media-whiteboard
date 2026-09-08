@@ -1,4 +1,4 @@
-import type { EncodeRequest, ExportPhase, ExportResult } from '../../shared/ipc';
+import type { EncodeRequest, ExportPhase, ExportResult, OutputFormat, Quality } from '../../shared/ipc';
 import { openExport } from './channel';
 
 /**
@@ -18,8 +18,8 @@ export interface ProbeOptions {
   height: number;
   fps: number;
   frameCount: number;
-  format: 'webp' | 'gif';
-  quality: 'low' | 'medium' | 'high';
+  format: OutputFormat;
+  quality: Quality;
   outputPath: string;
   onProgress?(phase: ExportPhase, progress: number): void;
   signal?: AbortSignal;
