@@ -198,6 +198,19 @@ export class Encoder {
       ];
     }
 
+    if (request.format === 'png') {
+      return [
+        // Static output only (spec §6), so the renderer sends exactly one frame
+        // and `frameCount` is already 1. Stating it anyway means a mismatch
+        // ends the encode cleanly instead of writing a numbered sequence.
+        '-frames:v', '1',
+        // Lossless and alpha-carrying, so there is no quality knob and nothing
+        // to flatten. The Quality control is disabled while PNG is selected.
+        '-c:v', 'png',
+        request.outputPath,
+      ];
+    }
+
     return [
       '-c:v', 'libwebp_anim',
       '-loop', '0', // §8: infinite
