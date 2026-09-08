@@ -48,11 +48,24 @@ class StderrTail {
   }
 }
 
-function quality(request: EncodeRequest): string[] {
+function webpQuality(request: EncodeRequest): string[] {
   // §12: webp q:v 50/75/90; gif maps quality to dither instead.
   const q = { low: '50', medium: '75', high: '90' }[request.quality];
   return ['-q:v', q];
 }
+
+/**
+ * H.264 rate control (spec §7). CRF is constant-quality, so file size varies
+ * with content rather than being targeted — which is the point.
+ *
+ * These match the sibling project Video Trim & Crop, deliberately: two apps by
+ * the same author that both say "High" should mean the same thing by it.
+ */
+const H264_QUALITY = {
+  high: { crf: '17', preset: 'slow' },
+  medium: { crf: '20', preset: 'medium' },
+  low: { crf: '23', preset: 'fast' },
+} as const;
 
 /**
  * libwebp advertises bgra, yuv420p and yuva420p, and left alone ffmpeg
@@ -79,6 +92,38 @@ function inputArgs(request: EncodeRequest, source: string): string[] {
     '-i', source,
     // §17: audio is stripped from every source, and nothing here produces any.
     '-an',
+  ];
+}
+
+/**
+ * The MP4 filter chain (spec §3 and §4). Two problems, one pass:
+ *
+ * 1. H.264 with yuv420p needs even dimensions, and `canvasRect` can be odd.
+ *    Left alone ffmpeg does not fail — it silently writes 400x300 for a 401x301
+ *    input, losing a row and a column. `pad` adds up to one pixel instead, and
+ *    computes the target size itself.
+ *
+ * 2. rgba -> yuv420p *discards* alpha rather than compositing it, so a
+ *    transparent region keeps its underlying RGB at full strength and
+ *    anti-aliased edges become hard colour halos. Compositing over black first
+ *    is what makes transparency degrade the way a viewer expects.
+ *
+ * The overlay is only built when there is alpha to flatten; an opaque document
+ * already has a background drawn by buildScene and would pay for the pass for
+ * nothing.
+ */
+function mp4Filters(request: EncodeRequest): string[] {
+  const pad = 'pad=ceil(iw/2)*2:ceil(ih/2)*2:color=black';
+
+  if (!request.transparent) {
+    return ['-vf', `${pad},format=yuv420p`];
+  }
+
+  const { width, height, fps } = request;
+  return [
+    '-filter_complex',
+    `color=c=black:s=${width}x${height}:r=${fps}[bg];` +
+      `[bg][0:v]overlay=shortest=1,${pad},format=yuv420p`,
   ];
 }
 
@@ -121,14 +166,7 @@ export class Encoder {
     }
 
     const { ffmpeg } = binaries();
-    const args = [
-      ...inputArgs(this.request, 'pipe:0'),
-      '-c:v', 'libwebp_anim',
-      '-loop', '0', // §8: infinite
-      ...webpPixelFormat(this.request),
-      ...quality(this.request),
-      this.request.outputPath,
-    ];
+    const args = [...inputArgs(this.request, 'pipe:0'), ...this.encoderArgs()];
 
     const proc = spawn(ffmpeg, args, { stdio: ['pipe', 'ignore', 'pipe'] });
     this.proc = proc;
@@ -137,6 +175,36 @@ export class Encoder {
     proc.stdin.on('error', () => {
       // ffmpeg exiting early closes the pipe; the exit code is the real error.
     });
+  }
+
+  /** Output-side arguments for the one-pass formats. GIF never reaches here. */
+  private encoderArgs(): string[] {
+    const request = this.request;
+
+    if (request.format === 'mp4') {
+      const { crf, preset } = H264_QUALITY[request.quality];
+      return [
+        ...mp4Filters(request),
+        '-c:v', 'libx264',
+        '-preset', preset,
+        '-crf', crf,
+        '-profile:v', 'high',
+        // Puts the moov atom first so the file starts playing before it has
+        // been fully read — the difference between a preview that works in a
+        // chat client and one that does not.
+        '-movflags', '+faststart',
+        // §5: MP4 has no loop flag. Looping is the player's business.
+        request.outputPath,
+      ];
+    }
+
+    return [
+      '-c:v', 'libwebp_anim',
+      '-loop', '0', // §8: infinite
+      ...webpPixelFormat(request),
+      ...webpQuality(request),
+      request.outputPath,
+    ];
   }
 
   /**

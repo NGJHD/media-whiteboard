@@ -6,7 +6,8 @@
  * result is actually an animation with the expected frame count and dimensions,
  * because ffmpeg exiting 0 does not by itself prove the file loops.
  *
- * Usage: node scripts/smoke-export.mjs [webp|gif|both]
+ * Usage: node scripts/smoke-export.mjs [all|webp|gif|mp4|png|webp,mp4]
+ *   MW_W / MW_H / MW_FPS / MW_FRAMES / MW_QUALITY override the case defaults.
  */
 import { context as esbuildContext } from 'esbuild';
 import { createServer } from 'vite';
@@ -17,27 +18,77 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bundles, root } from './esbuild.config.mjs';
 
-const which = process.argv[2] ?? 'both';
-const formats = which === 'both' ? ['webp', 'gif'] : [which];
+const which = process.argv[2] ?? 'all';
 
 const outDir = path.join(root, 'resources', '.download', 'smoke');
 fs.mkdirSync(outDir, { recursive: true });
 
 const ffprobe = path.join(root, 'resources', 'bin', 'ffprobe.exe');
 
-// Overridable so the same harness can be used to measure throughput at a
-// realistic canvas size, not just to check correctness at a small one.
+// Overridable so the same harness can measure throughput at a realistic canvas
+// size, and so the size estimate can be calibrated per quality.
 const num = (name, fallback) => Number(process.env[name] ?? fallback);
+const W = num('MW_W', 320);
+const H = num('MW_H', 180);
+const QUALITY = process.env.MW_QUALITY ?? 'high';
 
-const CASES = formats.map((format) => ({
-  format,
-  width: num('MW_W', 320),
-  height: num('MW_H', 180),
-  fps: num('MW_FPS', 25),
-  frameCount: num('MW_FRAMES', 30),
-  quality: 'high',
-  outputPath: path.join(outDir, `smoke.${format}`),
-}));
+/**
+ * ffprobe's codec name per format, and the dimensions to expect back.
+ *
+ * MP4 is the only format whose output may differ from the canvas: H.264 needs
+ * even dimensions, and the spec pads rather than crops
+ * (docs/superpowers/specs/2026-09-08-mp4-png-output-formats.md §3). The odd case
+ * exists to prove the pad, because ffmpeg's default behaviour is to silently
+ * crop instead.
+ */
+const FORMATS = {
+  // ffprobe reports the animated WebP decoder as webp_anim, not webp.
+  webp: { codec: 'webp_anim', frames: num('MW_FRAMES', 30) },
+  gif: { codec: 'gif', frames: num('MW_FRAMES', 30) },
+  mp4: { codec: 'h264', frames: num('MW_FRAMES', 30) },
+  png: { codec: 'png', frames: 1 },
+};
+
+const even = (n) => n + (n % 2);
+
+const formats = which === 'all' ? Object.keys(FORMATS) : which.split(',');
+
+const CASES = [];
+for (const format of formats) {
+  const spec = FORMATS[format];
+  if (!spec) throw new Error(`Unknown format "${format}". Try: ${Object.keys(FORMATS).join(', ')}`);
+  CASES.push({
+    format,
+    codec: spec.codec,
+    width: W,
+    height: H,
+    expectWidth: format === 'mp4' ? even(W) : W,
+    expectHeight: format === 'mp4' ? even(H) : H,
+    fps: num('MW_FPS', 25),
+    frameCount: spec.frames,
+    expectFrames: spec.frames,
+    quality: QUALITY,
+    outputPath: path.join(outDir, `smoke.${format}`),
+  });
+}
+
+// §3: an odd canvas must gain a pixel, not lose one. Only MP4 constrains this.
+if (formats.includes('mp4')) {
+  CASES.push({
+    format: 'mp4',
+    codec: 'h264',
+    width: 321,
+    height: 181,
+    expectWidth: 322,
+    expectHeight: 182,
+    fps: 25,
+    frameCount: 10,
+    expectFrames: 10,
+    quality: QUALITY,
+    outputPath: path.join(outDir, 'smoke-odd.mp4'),
+    label: 'mp4 (odd canvas)',
+  });
+}
 
 // Pick any free port: vite.config.ts pins 5273 with strictPort for dev, and the
 // smoke test must not collide with a dev server the developer already has open.
@@ -65,7 +116,7 @@ for (const testCase of CASES) {
     outputPath: testCase.outputPath,
   })})`;
 
-  process.stdout.write(`\n=== ${testCase.format} ===\n`);
+  process.stdout.write(`\n=== ${testCase.label ?? testCase.format} ===\n`);
   const result = await runOnce(spec);
 
   if (!result || result.ok !== true) {
@@ -166,11 +217,10 @@ function verify(testCase) {
 
   const frames = Number(stream.nb_read_frames);
   const checks = [
-    // ffprobe reports the animated WebP decoder as webp_anim, not webp.
-    ['codec', stream.codec_name, testCase.format === 'webp' ? 'webp_anim' : 'gif'],
-    ['width', Number(stream.width), testCase.width],
-    ['height', Number(stream.height), testCase.height],
-    ['frames', frames, testCase.frameCount],
+    ['codec', stream.codec_name, testCase.codec],
+    ['width', Number(stream.width), testCase.expectWidth],
+    ['height', Number(stream.height), testCase.expectHeight],
+    ['frames', frames, testCase.expectFrames],
   ];
 
   let ok = true;
