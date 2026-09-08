@@ -753,9 +753,10 @@ edit.
 
 **WebP is one pass**: the base command above, straight from the render loop's stdin.
 
-**GIF is two passes over a scratch file**, because `palettegen` must see every frame
-before `paletteuse` can write the first one, and the render loop can only produce the
-stream once:
+**GIF is three passes over a scratch file** — the render loop writes it, then
+`palettegen` reads it, then `paletteuse` reads it again — because `palettegen`
+must see every frame before `paletteuse` can write the first one, and the
+render loop can only produce the stream once:
 
 ```
 # pass 0 — the render loop writes raw frames to scratch
