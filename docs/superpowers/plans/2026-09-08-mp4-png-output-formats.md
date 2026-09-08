@@ -1129,10 +1129,14 @@ console.log('=== Stale format falls back (§6) ===');
       await wait();
       const keptMp4 = useStore.getState().doc.format;
 
-      // Removing the last animated layer must take MP4 away.
+      // Removing the last animated layer must take MP4 away — and the
+      // correction must not add an undo entry of its own (§6: it is a mutate,
+      // not an apply, so undo reaches the state before the user's delete).
       useStore.getState().apply('Delete', (d) => { d.objects = []; });
+      const undoDepthAfterDelete = useStore.getState().undoStack.length;
       await wait();
       const afterDelete = useStore.getState().doc;
+      const undoDepthAfterFallback = useStore.getState().undoStack.length;
 
       // A static document may select PNG.
       useStore.getState().mutate((d) => { d.format = 'png'; d.outputPath = 'C:/out/a.png'; });
@@ -1153,9 +1157,8 @@ console.log('=== Stale format falls back (§6) ===');
         afterAddFormat: afterAdd.format,
         afterAddExt: afterAdd.outputPath.slice(afterAdd.outputPath.lastIndexOf('.')),
         fallback: f.FALLBACK_FORMAT,
-        // The correction must not be undoable: undo should reach the state
-        // before the user's delete, not an intermediate format-only step.
-        undoDepthSane: typeof useStore.getState().undo === 'function',
+        undoDepthAfterDelete,
+        undoDepthAfterFallback,
       };
     })()
   `);
@@ -1168,7 +1171,12 @@ console.log('=== Stale format falls back (§6) ===');
     c.check('and the extension follows', r.afterDeleteExt, '.webp');
     c.check('png falls back when animation arrives', r.afterAddFormat, 'webp');
     c.check('and the extension follows', r.afterAddExt, '.webp');
-    c.truthy('undo is still wired', r.undoDepthSane);
+    // §6: the app correcting itself is not an edit the user steps back through.
+    c.check(
+      'the fallback adds no undo entry',
+      r.undoDepthAfterFallback,
+      r.undoDepthAfterDelete,
+    );
   }
 }
 
