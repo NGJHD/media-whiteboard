@@ -102,17 +102,36 @@ export async function exportDocument({ doc, onProgress, signal }: ExportOptions)
 }
 
 /**
+ * H.264 bytes per pixel per frame at each CRF, measured from this encoder's own
+ * output at 640x360x120 (spec §8). Unlike the WebP figures below, inter-frame
+ * compression is already baked in — x264 is measured over a whole sequence, not
+ * extrapolated from a first frame.
+ */
+const H264_BYTES_PER_PIXEL_FRAME = {
+  low: 0.00687,
+  medium: 0.00719,
+  high: 0.0103,
+};
+
+/**
  * §12: an estimated output size shown before export starts. Animated WebP grows
  * fast, and a 651-frame loop is not obviously a large file until it is one.
  *
- * Encoding a real sample would be accurate but costs seconds; these
- * bytes-per-pixel figures come from measured output of this encoder at each
- * quality and are labelled as rough in the UI.
+ * Encoding a real sample would be accurate but costs seconds; these figures come
+ * from measured output of this encoder at each quality and are labelled as rough
+ * in the UI.
  */
 export function estimateBytes(doc: Doc): number {
   const plan = planLoop(doc);
   const pixels = doc.canvasRect.width * doc.canvasRect.height;
   const frames = plan.isStatic ? 1 : plan.frameCount;
+
+  if (doc.format === 'mp4') {
+    return Math.round(pixels * frames * H264_BYTES_PER_PIXEL_FRAME[doc.quality]);
+  }
+
+  // PNG is only offered for static documents, where the bottom bar shows
+  // "Static — 1 frame" and no estimate at all. Nothing to compute.
 
   const perPixel =
     doc.format === 'gif'
