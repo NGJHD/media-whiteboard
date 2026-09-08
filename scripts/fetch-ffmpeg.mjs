@@ -91,7 +91,8 @@ function findBinary(dir, name) {
 
 /**
  * Re-verify the licensing of what actually landed on disk, not what the pin file
- * claims. A wrong URL or a swapped asset would otherwise ship a GPL build.
+ * claims. A wrong URL or a swapped asset would otherwise ship a build that is
+ * not GPL, lacks libx264 or libwebp, or is nonfree.
  */
 function verifyLicense(ffmpegExe) {
   const out = execFileSync(ffmpegExe, ['-hide_banner', '-version'], { encoding: 'utf8' });

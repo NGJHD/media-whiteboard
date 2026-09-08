@@ -41,8 +41,8 @@ runtime.
 
 The app never links against FFmpeg. It **spawns `ffmpeg.exe` as a separate
 process** and communicates with it only through command-line arguments, exit codes
-and pipes — see `src/main/encoder.ts` and `src/main/media.ts`, the only places a
-child process is created.
+and pipes — see `src/main/encoder.ts`, `src/main/media.ts` and `src/main/index.ts`,
+the only places ffmpeg is invoked.
 
 Under the FSF's own guidance, programs that merely run at arm's length like this
 are separate works rather than a single combined program, so the GPL does not
