@@ -11,7 +11,7 @@ files:
   - dist/**/*
   - package.json
 
-# LGPL redistribution requires the notices to travel with the binaries (§15).
+# GPL redistribution requires the notices to travel with the binaries (§15).
 extraFiles:
   - THIRD-PARTY-NOTICES.md
   - LICENSE.ffmpeg.txt

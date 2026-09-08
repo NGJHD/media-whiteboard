@@ -1,7 +1,8 @@
 # Media Whiteboard
 
 A portable Windows desktop app for compositing animated and static media onto a
-canvas and exporting an infinitely-looping animated **WebP** or **GIF**.
+canvas and exporting an infinitely-looping animated **WebP**, **GIF** or **MP4** —
+or a single **PNG** when nothing moves.
 
 Drop in clips, GIFs and images, arrange them, annotate on top, and generate a
 single seamless loop — no timeline, no install, no dependencies.
@@ -47,6 +48,12 @@ The canvas animates live the whole time, so what you see is what gets exported.
   time from the dropdown.
 - **Transparency.** Turn the background off for a transparent WebP. (GIF alpha is
   1-bit, so soft edges go ragged — the app warns you.)
+- **Four output formats.** WebP and GIF always; MP4 (H.264) once something on the
+  canvas animates; PNG when nothing does. Formats that don't apply are greyed
+  with the reason, and Quality greys out for PNG because it's lossless. MP4 has
+  no transparency — the background flattens to black — and may come out one pixel
+  larger on an odd-sized canvas, because H.264 needs even dimensions and padding
+  beats cropping.
 - **Annotation tools.** Brush and eraser paint onto a raster layer above
   everything; rectangles, ellipses and multi-line text are editable objects with
   fonts, outlines and shadows. Double-click text to re-edit it in place.
@@ -106,12 +113,19 @@ esbuild, and launches Electron with hot reload on both sides.
 build. Without it, import and export both fail immediately.
 
 That fetch is not a convenience wrapper around a URL. It verifies a SHA-256 for
-the archive and for each binary, then re-inspects the extracted `ffmpeg` for GPL
-or nonfree configure flags and refuses the build if it finds any. This project is
-MIT and ships an **LGPL** ffmpeg; introducing a GPL component (`libx264`,
-`libx265`, `libxvid`) would force the whole project to GPL. If you bump the pinned
-build in `scripts/ffmpeg-build.json`, that check has to still pass, and `libwebp`
-has to still be present — not every LGPL build includes it.
+the archive and for each binary, then re-inspects the extracted `ffmpeg` and
+refuses it unless it is a **GPL** build carrying `libx264` and `libwebp`, and
+refuses any build configured `--enable-nonfree`.
+
+The GPL build is deliberate. MP4 output needs a CRF quality control, CRF is a
+per-encoder feature, and `libx264` is the only H.264 encoder that has it —
+`libopenh264` (BSD) has no CRF and no way to gain one. This project's own source
+stays **MIT**: the app spawns `ffmpeg.exe` as a child process and never links
+FFmpeg's libraries, which the FSF treats as separate works. The binaries stay GPL
+and carry their obligations, so `THIRD-PARTY-NOTICES.md` and `LICENSE.ffmpeg.txt`
+ship inside the zip and release notes must say the bundled FFmpeg is GPL v3.
+See `DECISIONS.md` D-043. If you bump the pin in `scripts/ffmpeg-build.json`,
+that check has to still pass.
 
 ### Scripts
 
@@ -167,6 +181,7 @@ downgrading.
 
 ### Licence
 
-MIT — see [`LICENSE`](LICENSE). Bundled ffmpeg is LGPL; see
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) and
+MIT — see [`LICENSE`](LICENSE). Bundled ffmpeg is **GPL v3**; the app's own
+source is unaffected because it spawns `ffmpeg.exe` as a child process rather
+than linking it. See [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) and
 [`LICENSE.ffmpeg.txt`](LICENSE.ffmpeg.txt), both of which ship inside the zip.

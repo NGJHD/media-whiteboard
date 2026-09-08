@@ -717,15 +717,39 @@ ffmpeg -y -f rawvideo -pix_fmt rgba -s <W>x<H> -r <fps> -i pipe:0 <encoder flags
 
 ### Per-format
 
-| | WebP | GIF |
-|---|---|---|
-| Encoder | `-c:v libwebp -loop 0` | palettegen + paletteuse |
-| Alpha | Full | 1-bit only |
-| Quality low / med / high | `-q:v 50 / 75 / 90` | dither: none / bayer / sierra2_4a |
-| Dimensions | any | any |
+| | WebP | GIF | MP4 | PNG |
+|---|---|---|---|---|
+| Encoder | `-c:v libwebp_anim -loop 0` | palettegen + paletteuse | `-c:v libx264` | `-c:v png -frames:v 1` |
+| Passes | one | three, over a scratch file | one | one |
+| Alpha | Full | 1-bit only | **None** — flattened to black | Full |
+| Quality low / med / high | `-q:v 50 / 75 / 90` | dither: none / bayer / sierra2_4a | `-crf 23 / 20 / 17` with preset fast / medium / slow | *(lossless — control disabled)* |
+| Dimensions | any | any | **even only — padded up by ≤1 px** | any |
+| Available when | always | always | at least one animated layer | no animated layers |
 
-Neither encoder constrains dimensions, so `canvasRect` is exported as-is. There is no
-video codec in this project (see §15) — do not add one without revisiting the license.
+**MP4 pads, never crops.** H.264 with `yuv420p` requires even dimensions, and
+`canvasRect` can be odd. Left alone ffmpeg does not fail — it silently writes
+400x300 for a 401x301 input. `pad=ceil(iw/2)*2:ceil(ih/2)*2:color=black` adds up
+to one pixel to the right and bottom instead, and derives the size itself. MP4 is
+the only format whose output may differ from `canvasRect`.
+
+**MP4 flattens transparency to black.** `rgba` to `yuv420p` *discards* alpha
+rather than compositing it, so a transparent region would keep its underlying RGB
+at full strength and anti-aliased edges would become hard colour halos. When
+`background.transparent` is set, composite over black first:
+`color=c=black:s=WxH:r=fps[bg];[bg][0:v]overlay=shortest=1`. There is no matte
+colour picker. Selecting MP4 with transparency on warns once, like GIF's 1-bit
+warning.
+
+**MP4 has no loop flag.** Looping is the player's business (`<video loop>`).
+`-loop 0` is not passed and no UI mentions it.
+
+**The format list depends on the document.** MP4 needs motion; PNG is for its
+absence. Unavailable formats are shown disabled with a stated reason, never
+hidden, and a selection that goes stale falls back to WebP — rewriting the
+extension, re-uniquing the path and toasting. Enforce that from the document in
+one place: a layer can arrive or leave by a drop, a delete, an undo or a project
+load, and only one of those goes through the dropdown. It is not an undoable
+edit.
 
 **WebP is one pass**: the base command above, straight from the render loop's stdin.
 
@@ -767,7 +791,9 @@ ffmpeg -y -f rawvideo -pix_fmt rgba -s <W>x<H> -r <fps> -i <scratch>        -i <
   pressed twice without a dialog in between. Still prompt before overwriting a path
   the user typed or chose themselves.
 
-Show an estimated output size before export starts. Animated WebP grows fast.
+Show an estimated output size before export starts. Animated WebP grows fast. A
+static document shows `Static — 1 frame` and no estimate, so PNG is never
+estimated.
 
 ---
 
@@ -817,17 +843,26 @@ Every one of these is a toast plus a no-op — never a crash, never a silent fai
   `extraResources` and **unpacked** (they must exist as real files on disk).
 - Resolve their paths via `process.resourcesPath` in production and a local path in
   dev. Never rely on `PATH`.
-- **Licensing: use an LGPL ffmpeg build.** The only encoders this project needs are
-  `libwebp` (BSD) and the native GIF encoder, both LGPL-compatible. No GPL-only
-  component (`libx264`, `libx265`, `libxvid`) may be introduced — adding one would
-  force the whole project to GPL. The project itself is therefore free to use a
-  permissive license; **MIT** unless decided otherwise.
-  - **Verify `libwebp` is actually present in the chosen LGPL build.** LGPL builds ship
-    a reduced set of external libraries and not all include it. Check with
-    `ffmpeg -hide_banner -encoders | findstr webp` before committing to a build.
-  - Pin the exact ffmpeg build (BtbN or gyan.dev). Record its version, license, and
-    source URL in `THIRD-PARTY-NOTICES.md` and ship that file inside the zip — LGPL
-    redistribution still requires corresponding source to be available.
+- **Licensing: use a GPL ffmpeg build.** MP4 output needs a CRF quality control;
+  CRF is a per-encoder rate-control mode; the only H.264 encoder that implements
+  it is `libx264`, which is GPL. `libopenh264` (BSD, present in LGPL builds) has
+  no CRF and no build flag that adds one. See
+  `docs/superpowers/specs/2026-09-08-mp4-png-output-formats.md` §2 and
+  `DECISIONS.md` D-043.
+  - **This project's own source stays MIT.** The app never links FFmpeg. It
+    spawns `ffmpeg.exe` as a child process and communicates only through argv,
+    pipes and exit codes, which under the FSF's own guidance makes them separate
+    works. Two things would break that, so never do either: linking libavcodec
+    and friends directly, or shipping a `--enable-nonfree` build.
+  - `scripts/fetch-ffmpeg.mjs` enforces this on every fetch: it **requires**
+    `--enable-gpl`, `--enable-libx264` and `--enable-libwebp`, **refuses**
+    `--enable-nonfree`, and checks that the `libwebp_anim`, `libwebp`, `libx264`,
+    `gif` and `png` encoders are all present. Not every build has libwebp.
+  - Pin the exact ffmpeg build (BtbN). Record its version, license, and source URL
+    in `THIRD-PARTY-NOTICES.md` and ship that file inside the zip — GPL
+    redistribution requires corresponding source to be available, and the release
+    notes must state that the bundled FFmpeg is GPL v3 and not covered by this
+    project's MIT licence.
 - The app icon lives at `build/icon.png` (square, at least 256 px). electron-builder
   compiles it into the exe; in dev the window points at the same file.
 - Any third-party asset that ships — icons included — is listed in
@@ -869,5 +904,6 @@ Do not build these unless explicitly asked later:
 - A layer panel
 - Cropping within a media object
 - Multi-select rotation (group *resize* is supported — see §10)
-- MP4 or any other video-codec output (see §15 — this would change the license)
+- HEVC, AV1, VP9 or WebM output (MP4/H.264 and PNG are supported — see §12)
+- A matte colour picker for MP4 (transparency flattens to black, always)
 - macOS or Linux support

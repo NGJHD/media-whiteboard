@@ -101,8 +101,9 @@ future Electron change to that default cannot silently reintroduce the leak.
 ## D-006 — ffmpeg binaries are fetched, not committed
 
 **Decision**: `resources/bin/` is gitignored except `.gitkeep`. A build script will
-download a pinned LGPL build and verify its SHA-256. The packaged app still ships the
-binaries via `extraResources` + `asarUnpack`.
+download a pinned **GPL** build and verify its SHA-256. The packaged app still ships
+the binaries via `extraResources` + `asarUnpack`. (The pin was LGPL originally; see
+D-043 for why it moved to GPL.)
 
 **Why**: the two exes are roughly 90 MB each. GitHub hard-blocks files over 100 MB
 and warns above 50, and even under the limit they would sit unmergeable in every
@@ -939,3 +940,76 @@ put the caret half a box — 160 px — to the left of where the user clicked. E
 other program places a caret where the pointer is and runs the text to the right
 of it. The vertical is unchanged: `y` is still the click, so the first line sits
 centred on it.
+
+## D-043 — Ship a GPL ffmpeg build so MP4 can have a CRF quality control
+
+**Decided:** 2026-09-08. Supersedes the LGPL-only rule in §15 as originally written.
+
+MP4 output was a §17 non-goal because §15 forbids GPL components. Investigating
+what MP4 would actually cost showed the constraint was really about CRF, not
+about H.264:
+
+- CRF is a per-encoder rate-control mode, not a container or codec feature.
+- `libx264` implements it and is GPL.
+- `libopenh264` — already present in the LGPL build, BSD-2-Clause — implements
+  none. Its options are `-b:v` with `rc_mode {off, quality, bitrate, buffer,
+  timestamp}`; "quality" mode is still bitrate-targeted. No flag adds CRF; the
+  encoder does not contain that code.
+
+So a bitrate-only MP4 was available for free, and a CRF one cost the licence
+change. Took the licence change: the sibling project Video Trim & Crop already
+ships a BtbN GPL build with libx264 at `-crf 17/20/23`, and the two apps saying
+the same thing by "High" is worth something.
+
+Media Whiteboard's own source stays MIT. The app spawns `ffmpeg.exe` rather than
+linking it, which the FSF treats as separate works. `THIRD-PARTY-NOTICES.md`
+carries the corresponding-source offer and the rationale.
+
+Moved to the `win64-gpl` asset of the same BtbN release and the same upstream
+commit, so only the licence surface changed. `scripts/fetch-ffmpeg.mjs` now
+requires GPL and libx264 rather than refusing them, and still refuses nonfree.
+
+**Rejected:** libopenh264 with bitrate targets. It keeps the LGPL story simple
+but gives a worse knob and worse quality per byte, for a format that exists
+precisely because people want to hand the file to someone else.
+
+**On the duplicated encoder assertions.** `scripts/fetch-ffmpeg.mjs` and
+`scripts/smoke-codecs.mjs` each independently check the installed binary for
+GPL/libx264/libwebp and the absence of nonfree flags, rather than the smoke
+test importing the fetch script's helper. This duplication is deliberate: the
+smoke test's entire value is that it asserts facts about the *installed*
+binary independently of the logic that fetched it. If it called into
+`fetch-ffmpeg.mjs`'s own assertion helper, a bug in that helper would pass
+both the fetch and the smoke test, and the corresponding-source guarantee this
+decision rests on could silently go stale. The accepted risk is that the two
+checks drift apart over time; that risk is bounded because divergence surfaces
+as a `smoke:codecs` failure, which is exactly the signal this exists to catch,
+not a silent gap.
+
+## D-044 — MP4 pads to even dimensions; PNG is the static output
+
+**Decided:** 2026-09-08.
+
+**Padding.** H.264 with `yuv420p` needs even dimensions and `canvasRect` does
+not. The failure mode is worse than an error: ffmpeg exits 0 and silently writes
+400x300 for a 401x301 input. Chose `pad=ceil(iw/2)*2:ceil(ih/2)*2:color=black`,
+which adds at most one pixel to the right and bottom and lets ffmpeg derive the
+size. Verified: 401x301 in, 402x302 out. Cropping was the alternative and was
+rejected — losing content silently is the thing that made the default dangerous.
+
+**Transparency.** `rgba` to `yuv420p` discards alpha rather than compositing it;
+a transparent region emerged with its RGB intact at full strength, which would
+have made anti-aliased edges into hard colour halos. Composite over black first.
+No matte picker: one more control for a case where black is nearly always right.
+
+**PNG.** A static document exported as a single-frame animated WebP is a worse
+PNG — larger, lossy at anything but the top quality, and a surprising file to
+receive. PNG is offered exactly when nothing animates, is lossless (so the
+Quality control greys out), and needs no even-dimension handling.
+
+**Availability.** Formats that do not apply are greyed with a reason rather than
+hidden; a vanished option is harder to reason about than a disabled one. A stale
+selection falls back to WebP through a single document-driven effect, because a
+layer can arrive or leave four different ways and only one of them is the
+dropdown. The correction is a `mutate`, not an `apply` — the app fixing itself
+is not an edit to undo.

@@ -103,7 +103,7 @@ export async function exportDocument({ doc, onProgress, signal }: ExportOptions)
 
 /**
  * H.264 bytes per pixel per frame at each CRF, measured from this encoder's own
- * output at 640x360x120 (spec §8). Unlike the WebP figures below, inter-frame
+ * output at 640x360x120 (CLAUDE.md §12). Unlike the WebP figures below, inter-frame
  * compression is already baked in — x264 is measured over a whole sequence, not
  * extrapolated from a first frame.
  */
