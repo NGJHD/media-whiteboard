@@ -5,6 +5,7 @@ import { enumerateFonts } from './state/fonts';
 import { installShortcuts } from './state/keyboard';
 import { useStore } from './state/store';
 import { planLoop } from './scene/timing';
+import { FALLBACK_FORMAT, formatSpec, isFormatAvailable, withExtension } from '../shared/formats';
 import { AboutDialog } from './ui/AboutDialog';
 import { BottomBar } from './ui/BottomBar';
 import { ExportModal, type ExportState } from './ui/ExportModal';
@@ -47,6 +48,41 @@ export function App() {
   }, [setFonts, toast]);
 
   useEffect(() => installShortcuts(), []);
+
+  /**
+   * §6: a format the document can no longer produce falls back to WebP.
+   *
+   * Enforced here, from the document, rather than at each call site — a layer
+   * can arrive or leave by a drop, a delete, an undo, or a project load, and
+   * only one of those goes through the format dropdown.
+   *
+   * `mutate`, not `apply`: the app correcting itself is not an edit the user
+   * should have to step back through.
+   */
+  const isStatic = useStore((s) => planLoop(s.doc).isStatic);
+  const format = useStore((s) => s.doc.format);
+  useEffect(() => {
+    if (isFormatAvailable(format, isStatic)) return;
+
+    const from = formatSpec(format).label;
+    const to = formatSpec(FALLBACK_FORMAT).label;
+
+    useStore.getState().mutate((draft) => {
+      draft.format = FALLBACK_FORMAT;
+      draft.outputPath = withExtension(draft.outputPath, FALLBACK_FORMAT);
+    });
+
+    toast('info', `${from} is not available for this document — switched to ${to}.`);
+
+    // The new extension may collide with a file that is already there.
+    void window.api
+      .uniqueOutputPath(useStore.getState().doc.outputPath)
+      .then((unique) => {
+        useStore.getState().mutate((draft) => {
+          draft.outputPath = unique;
+        });
+      });
+  }, [format, isStatic, toast]);
 
   /**
    * §7 phase two. The object is already on the canvas by the time any of this

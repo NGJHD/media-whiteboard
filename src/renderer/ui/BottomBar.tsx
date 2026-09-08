@@ -3,9 +3,13 @@ import type { OutputFormat, Quality } from '../../shared/ipc';
 import { useStore } from '../state/store';
 import { autoFps, FPS_OPTIONS, planLoop } from '../scene/timing';
 import { estimateBytes } from '../export/exportScene';
+import { FORMATS, formatSpec, isFormatAvailable, withExtension } from '../../shared/formats';
+import { IconInfo } from './icons';
 
 /** §12 asks for this warning once, not once per format change. */
 let warnedAboutGifAlpha = false;
+/** Spec §4: the same courtesy for MP4, which has no alpha at all. */
+let warnedAboutMp4Alpha = false;
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -28,6 +32,13 @@ export function BottomBar({ onGenerate }: { onGenerate(): void }) {
   const plan = useMemo(() => planLoop(doc), [doc]);
   const auto = useMemo(() => autoFps(doc), [doc]);
   const estimate = useMemo(() => estimateBytes(doc), [doc]);
+
+  // §6: unavailable formats are shown disabled, not hidden — a greyed option
+  // with a reason is easier to understand than one that vanishes.
+  const unavailable = useMemo(
+    () => FORMATS.filter((f) => !isFormatAvailable(f.id, plan.isStatic)),
+    [plan.isStatic],
+  );
 
   // Local text state, so a half-typed path is not a document edit per keystroke.
   const [path, setPath] = useState(doc.outputPath);
@@ -57,7 +68,7 @@ export function BottomBar({ onGenerate }: { onGenerate(): void }) {
   function setFormat(format: OutputFormat) {
     apply('Format', (draft) => {
       draft.format = format;
-      draft.outputPath = draft.outputPath.replace(/\.(webp|gif)$/i, `.${format}`);
+      draft.outputPath = withExtension(draft.outputPath, format);
     });
 
     // The new extension may collide with a file that is already there; §12's
@@ -68,13 +79,23 @@ export function BottomBar({ onGenerate }: { onGenerate(): void }) {
       });
     });
 
-    // §12: warn once that GIF's 1-bit alpha makes soft edges ragged. Only worth
-    // saying when there is actually transparency to ruin.
-    if (format === 'gif' && doc.background.transparent && !warnedAboutGifAlpha) {
+    if (!doc.background.transparent) return;
+
+    // §12: warn once that GIF's 1-bit alpha makes soft edges ragged, and once
+    // that MP4 has no alpha at all. Only worth saying when there is actually
+    // transparency at stake.
+    if (format === 'gif' && !warnedAboutGifAlpha) {
       warnedAboutGifAlpha = true;
       useStore.getState().toast(
         'warn',
         'GIF alpha is 1-bit: soft or anti-aliased transparent edges will look ragged.',
+      );
+    }
+    if (format === 'mp4' && !warnedAboutMp4Alpha) {
+      warnedAboutMp4Alpha = true;
+      useStore.getState().toast(
+        'warn',
+        'MP4 carries no transparency: the background will be flattened to black.',
       );
     }
   }
@@ -104,10 +125,23 @@ export function BottomBar({ onGenerate }: { onGenerate(): void }) {
         <label className="field">
           Format
           <select value={doc.format} onChange={(e) => setFormat(e.target.value as OutputFormat)}>
-            <option value="webp">WebP</option>
-            <option value="gif">GIF</option>
+            {FORMATS.map((f) => (
+              <option key={f.id} value={f.id} disabled={!isFormatAvailable(f.id, plan.isStatic)}>
+                {f.label}
+              </option>
+            ))}
           </select>
         </label>
+        {unavailable.length > 0 ? (
+          <span
+            className="field-hint"
+            role="img"
+            aria-label={`Some formats are unavailable: ${unavailable.map((f) => f.requirement).join(' ')}`}
+            title={unavailable.map((f) => f.requirement).join('\n')}
+          >
+            <IconInfo />
+          </span>
+        ) : null}
 
         <label className="field">
           FPS
@@ -132,10 +166,18 @@ export function BottomBar({ onGenerate }: { onGenerate(): void }) {
           </select>
         </label>
 
-        <label className="field">
+        <label className={`field${formatSpec(doc.format).supportsQuality ? '' : ' disabled'}`}>
           Quality
           <select
             value={doc.quality}
+            // Spec §7: PNG is lossless, so the control is disabled rather than
+            // left to look as though it does something.
+            disabled={!formatSpec(doc.format).supportsQuality}
+            title={
+              formatSpec(doc.format).supportsQuality
+                ? undefined
+                : `${formatSpec(doc.format).label} is lossless — there is nothing to trade.`
+            }
             onChange={(e) => {
               const quality = e.target.value as Quality;
               apply('Quality', (draft) => {
