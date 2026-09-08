@@ -1,13 +1,13 @@
 /**
- * Fetches the pinned LGPL ffmpeg build into resources/bin/ (CLAUDE.md §15).
+ * Fetches the pinned GPL ffmpeg build into resources/bin/ (see
+ * docs/superpowers/specs/2026-09-08-mp4-png-output-formats.md §2 for why GPL).
  *
  * The binaries are not committed: they are ~110 MB each, above GitHub's 100 MB
  * hard file limit. This runs at build time; the packaged app ships them via
  * electron-builder extraResources, so an end user never fetches anything.
  *
  * Everything here is checksum-verified, and the extracted ffmpeg is re-inspected
- * for GPL/nonfree flags before it is accepted — a GPL component would force this
- * whole project to GPL (§15).
+ * for its licence flags before it is accepted.
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -26,9 +26,17 @@ const build = JSON.parse(fs.readFileSync(path.join(scriptDir, 'ffmpeg-build.json
 const WANTED = ['ffmpeg.exe', 'ffprobe.exe'];
 
 /** Configure flags that would change this project's license obligations. */
-const FORBIDDEN_FLAGS = ['--enable-gpl', '--enable-nonfree'];
-/** Without this, there is no WebP encoder and §12 cannot work at all. */
-const REQUIRED_FLAGS = ['--enable-libwebp'];
+const FORBIDDEN_FLAGS = ['--enable-nonfree'];
+/**
+ * Required. `--enable-gpl` and `--enable-libx264` are deliberate: MP4 output
+ * needs CRF, CRF needs libx264, libx264 is GPL. libopenh264 in the LGPL build
+ * has no CRF and no way to gain one. See
+ * docs/superpowers/specs/2026-09-08-mp4-png-output-formats.md §2.
+ *
+ * `--enable-libwebp` is not optional either: without it §12 cannot encode WebP,
+ * and not every build includes it.
+ */
+const REQUIRED_FLAGS = ['--enable-gpl', '--enable-libx264', '--enable-libwebp'];
 
 function sha256(file) {
   const hash = createHash('sha256');
@@ -93,7 +101,7 @@ function verifyLicense(ffmpegExe) {
   if (violations.length > 0) {
     throw new Error(
       `Refusing this ffmpeg build: it was configured with ${violations.join(', ')}. ` +
-        `§15 forbids GPL/nonfree components — they would relicense this project.`,
+        `A nonfree component cannot be redistributed at all.`,
     );
   }
 
@@ -101,19 +109,24 @@ function verifyLicense(ffmpegExe) {
   if (missing.length > 0) {
     throw new Error(
       `Refusing this ffmpeg build: missing ${missing.join(', ')}. ` +
-        `Not all LGPL builds include libwebp, and §12 needs it to encode WebP.`,
+        `This project pins the GPL build for libx264 (MP4/CRF) and needs ` +
+        `libwebp for WebP. An LGPL build has neither x264 nor any CRF-capable ` +
+        `H.264 encoder.`,
     );
   }
 
   const encoders = execFileSync(ffmpegExe, ['-hide_banner', '-encoders'], { encoding: 'utf8' });
-  for (const enc of ['libwebp_anim', 'libwebp']) {
+  for (const enc of ['libwebp_anim', 'libwebp', 'libx264']) {
     if (!encoders.includes(enc)) throw new Error(`Refusing this ffmpeg build: no ${enc} encoder.`);
   }
   if (!/^\s*V\S*\s+gif\s/m.test(encoders)) {
     throw new Error('Refusing this ffmpeg build: no native gif encoder.');
   }
+  if (!/^\s*V\S*\s+png\s/m.test(encoders)) {
+    throw new Error('Refusing this ffmpeg build: no native png encoder.');
+  }
 
-  console.log(`  verified: libwebp present, no GPL/nonfree flags`);
+  console.log('  verified: GPL build, libx264 + libwebp present, nothing nonfree');
 }
 
 async function main() {

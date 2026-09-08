@@ -12,43 +12,56 @@ software. This file ships inside the release zip.
 | | |
 |---|---|
 | Version | `n9.0.1-11-ge47273f4d9-20260901` |
-| License | **LGPL v3 or later** (built with `--enable-version3`) |
-| Build | BtbN/FFmpeg-Builds, release `autobuild-2026-09-01-13-13`, asset `ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-9.0.zip` |
+| License | **GNU GPL v3 or later** (built with `--enable-gpl --enable-version3`) |
+| Build | BtbN/FFmpeg-Builds, release `autobuild-2026-09-01-13-13`, asset `ffmpeg-n9.0.1-11-ge47273f4d9-win64-gpl-9.0.zip` |
 | Build scripts | https://github.com/BtbN/FFmpeg-Builds |
 | Upstream source | https://github.com/FFmpeg/FFmpeg/tree/e47273f4d9 |
 
-FFmpeg is free software licensed under the GNU Lesser General Public License
-version 3 or later. The full licence text is reproduced in `LICENSE.ffmpeg.txt`
-alongside this file.
+FFmpeg is LGPL v2.1+ by default. This build is configured with `--enable-gpl`
+(required for **libx264**, which MP4 output depends on) and `--enable-version3`.
+Together those make the resulting binaries **GPL v3**. The full licence text is
+reproduced in `LICENSE.ffmpeg.txt` alongside this file.
 
-**Corresponding source.** LGPL redistribution requires the corresponding source
-to be available. It is at the upstream URL above, at the exact commit the build
-was made from (`e47273f4d9`), and the scripts used to produce these binaries are
-in the BtbN repository. The exact release and asset name are pinned in
+Notable GPL components in this build: **libx264**, **libx265**, **libzimg**.
+
+**Corresponding source.** GPL redistribution requires the corresponding source to
+be available. It is at the upstream URL above, at the exact commit the build was
+made from (`e47273f4d9`), and the scripts used to produce these binaries are in
+the BtbN repository. The exact release and asset name are pinned in
 `scripts/ffmpeg-build.json`, along with SHA-256 checksums of the archive and of
 each extracted binary.
 
-**Relinking.** The LGPL requires that a user be able to replace the covered
-library with a modified version. These binaries are separate executables invoked
-as child processes, not libraries linked into Media Whiteboard. A user may
-replace `resources/bin/ffmpeg.exe` and `resources/bin/ffprobe.exe` with their own
-builds; the app invokes them by absolute path and does not verify their contents
-at runtime.
+**Replacing the binaries.** These are separate executables invoked as child
+processes, not libraries linked into Media Whiteboard. A user may replace
+`resources/bin/ffmpeg.exe` and `resources/bin/ffprobe.exe` with their own builds;
+the app invokes them by absolute path and does not verify their contents at
+runtime.
 
-**No GPL or non-free components.** This build was verified before it was pinned,
-and `scripts/fetch-ffmpeg.mjs` re-verifies on every fetch, refusing any build
-whose `configuration:` line contains `--enable-gpl` or `--enable-nonfree`. The
-build explicitly disables `libx264`, `libx265`, `libxavs2` and `libxvid`.
-Introducing any GPL component would relicense this project (CLAUDE.md §15).
+### Why Media Whiteboard's own code stays MIT
 
-**Encoders actually used by this app:**
+The app never links against FFmpeg. It **spawns `ffmpeg.exe` as a separate
+process** and communicates with it only through command-line arguments, exit codes
+and pipes — see `src/main/encoder.ts` and `src/main/media.ts`, the only places a
+child process is created.
 
-- `libwebp` / `libwebp_anim` — WebP encoding. libwebp is BSD-3-Clause.
-- `gif` — FFmpeg's native GIF encoder, plus the `palettegen` and `paletteuse`
-  filters.
+Under the FSF's own guidance, programs that merely run at arm's length like this
+are separate works rather than a single combined program, so the GPL does not
+reach back into this codebase. This is the same arrangement many applications that
+ship FFmpeg rely on. The FFmpeg binaries remain GPL and carry their obligations
+with them; the code in `src/` remains MIT.
 
-No video codec is used, and none may be added without revisiting the licence
-(CLAUDE.md §15, §17).
+Two things would change that conclusion, so avoid both:
+
+- linking FFmpeg's libraries directly (libavcodec and friends) instead of
+  spawning the executable;
+- shipping a build configured with `--enable-nonfree`, which cannot be
+  redistributed at all. `scripts/fetch-ffmpeg.mjs` refuses those.
+
+**When distributing a release,** keep `THIRD-PARTY-NOTICES.md`,
+`LICENSE.ffmpeg.txt` and `LICENSE` inside the zip (electron-builder's `extraFiles`
+already does this), and state in the release notes that the bundled FFmpeg is GPL
+v3 and is not covered by this project's MIT licence, linking the upstream commit
+above for corresponding source.
 
 ---
 

@@ -1,31 +1,35 @@
 {
   "_comment": [
-    "The pinned ffmpeg build (CLAUDE.md §15). Do not point this at BtbN's 'latest'",
-    "tag: that tag is rolling and its assets are replaced in place, so it cannot be",
-    "pinned. 'autobuild-*' tags are immutable.",
+    "The pinned ffmpeg build. Do not point this at BtbN's 'latest' tag: that tag",
+    "is rolling and its assets are replaced in place, so it cannot be pinned.",
+    "'autobuild-*' tags are immutable.",
     "",
-    "This build was verified before pinning, as §15 requires:",
-    "  --enable-libwebp present, libwebp_anim + libwebp encoders present,",
-    "  native gif encoder present, webp_anim decoder present,",
-    "  no --enable-gpl, no --enable-nonfree,",
-    "  --disable-libx264 --disable-libx265 --disable-libxvid.",
+    "This is the GPL build, deliberately. See",
+    "docs/superpowers/specs/2026-09-08-mp4-png-output-formats.md §2: MP4 output",
+    "with a CRF quality dropdown needs libx264, libx264 is GPL, and libopenh264",
+    "(BSD, in the LGPL build) implements no CRF at all.",
     "",
-    "It is LGPL v3 (--enable-version3). See THIRD-PARTY-NOTICES.md.",
+    "This project's own source stays MIT. ffmpeg is spawned as a separate",
+    "process and never linked, so the GPL does not reach into src/. The binaries",
+    "remain GPL and carry their obligations — see THIRD-PARTY-NOTICES.md.",
     "",
-    "To move to a newer build: change the fields below, then re-run the",
-    "verification in scripts/fetch-ffmpeg.mjs, which refuses any build whose",
-    "configuration line contains a GPL or nonfree flag or lacks libwebp."
+    "Same release and same upstream commit as the LGPL build this replaced; only",
+    "the asset changed.",
+    "",
+    "To move to a newer build: change the fields below, then re-run",
+    "scripts/fetch-ffmpeg.mjs, which refuses any build that is not GPL, lacks",
+    "libx264 or libwebp, or carries a nonfree component."
   ],
   "release": "autobuild-2026-09-01-13-13",
   "version": "n9.0.1-11-ge47273f4d9-20260901",
-  "license": "LGPL-3.0-or-later",
-  "asset": "ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-9.0.zip",
-  "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-01-13-13/ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-9.0.zip",
+  "license": "GPL-3.0-or-later",
+  "asset": "ffmpeg-n9.0.1-11-ge47273f4d9-win64-gpl-9.0.zip",
+  "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-01-13-13/ffmpeg-n9.0.1-11-ge47273f4d9-win64-gpl-9.0.zip",
   "sourceUrl": "https://github.com/BtbN/FFmpeg-Builds",
   "upstreamSourceUrl": "https://github.com/FFmpeg/FFmpeg/tree/e47273f4d9",
-  "zipSha256": "884642332068325779044e043e44972e0ca979053b2207e96603e417fb6af667",
+  "zipSha256": "38c54b3d96147533dc568c1cf0709550af50b8c182711ff16792c9a27af728d8",
   "binaries": {
-    "ffmpeg.exe": "b664908543d61b2c661abfff8210cb2770d5dd7ce79f57ed92edfd5728618893",
-    "ffprobe.exe": "3e7093131dd07bb97153c33ff61062eafefba2e1c3c96fae6d1617473f975e4e"
+    "ffmpeg.exe": "b198a2c89b8d7e2745474369fc1b4d8df25372cef823651bb1a7903273128cc1",
+    "ffprobe.exe": "704bebd72de4e985038efc6653a7fc33ff3e37fe7b9075541afb5e03a56cf47c"
   }
 }
