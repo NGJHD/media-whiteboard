@@ -134,7 +134,7 @@ that check has to still pass.
 | `npm run dev` | Dev server + Electron, hot reload |
 | `npm run build` | Compile main, preload and renderer into `dist/` |
 | `npm run typecheck` | `tsc --noEmit` across all three tsconfigs |
-| `npm run smoke` | Headless end-to-end checks (export, import, scene, timing, tools, transform, preview, updater) |
+| `npm run smoke` | Headless end-to-end checks (codecs, formats, output-ui, updater, export, import, scene, select, timing, tools, transform, preview) |
 | `npm run package` | `prepackage` fetches ffmpeg and builds, then electron-builder writes `release/` |
 
 `npm run package` produces both a portable folder and the zip that the in-app

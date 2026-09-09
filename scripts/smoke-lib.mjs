@@ -127,8 +127,8 @@ export function makeChecker() {
  * A 1920x1080 clip fits ~64 frames and the prefetch keeps up, so it never
  * reproduces.
  *
- * mjpeg because the LGPL build has no x264 (§15) and it decodes fast — the cost
- * under test is the PNG encode and the renderer's bitmap churn, not this.
+ * mjpeg because it decodes fast — the cost under test is the PNG encode and
+ * the renderer's bitmap churn, not this.
  */
 export function ensureLargeClip() {
   const file = path.join(workDir, 'large-clip.avi');

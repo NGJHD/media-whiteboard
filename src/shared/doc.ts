@@ -7,6 +7,7 @@
  */
 
 import type { OutputFormat } from './ipc';
+import { FALLBACK_FORMAT } from './formats';
 
 export type LayerId = string;
 
@@ -185,7 +186,7 @@ export function createEmptyDoc(outputPath: string): Doc {
     background: { transparent: false, color: '#000000' },
     outputFps: 'auto',
     quality: 'high',
-    format: 'webp',
+    format: FALLBACK_FORMAT,
     outputPath,
     objects: [],
     paint: { strokes: [], dirtyRect: null },

@@ -27,8 +27,14 @@ export interface FormatSpec {
   requirement: string | null;
 }
 
-export const FORMATS: readonly FormatSpec[] = [
-  {
+/**
+ * Keyed by id so a fifth format with no entry here is a compile error, not a
+ * runtime `throw` in `formatSpec()`. `OutputFormat` (src/shared/ipc.ts) and this
+ * table would otherwise be free to drift — the union grows, the table doesn't,
+ * and nothing notices until the missing lookup throws at runtime.
+ */
+const FORMAT_BY_ID: Record<OutputFormat, FormatSpec> = {
+  webp: {
     id: 'webp',
     label: 'WebP',
     extension: 'webp',
@@ -37,7 +43,7 @@ export const FORMATS: readonly FormatSpec[] = [
     supportsAlpha: true,
     requirement: null,
   },
-  {
+  gif: {
     id: 'gif',
     label: 'GIF',
     extension: 'gif',
@@ -46,7 +52,7 @@ export const FORMATS: readonly FormatSpec[] = [
     supportsAlpha: true,
     requirement: null,
   },
-  {
+  mp4: {
     id: 'mp4',
     label: 'MP4',
     extension: 'mp4',
@@ -55,7 +61,7 @@ export const FORMATS: readonly FormatSpec[] = [
     supportsAlpha: false,
     requirement: 'MP4 needs at least one animated layer on the canvas.',
   },
-  {
+  png: {
     id: 'png',
     label: 'PNG',
     extension: 'png',
@@ -64,7 +70,11 @@ export const FORMATS: readonly FormatSpec[] = [
     supportsAlpha: true,
     requirement: 'PNG is available only while nothing on the canvas animates.',
   },
-];
+};
+
+// Array order is the dropdown's render order and is asserted by
+// scripts/smoke-formats.mjs — keep it webp, gif, mp4, png.
+export const FORMATS: readonly FormatSpec[] = Object.values(FORMAT_BY_ID);
 
 /**
  * §6: what a stale selection falls back to. WebP is the only sane choice — it is
@@ -73,9 +83,7 @@ export const FORMATS: readonly FormatSpec[] = [
 export const FALLBACK_FORMAT: OutputFormat = 'webp';
 
 export function formatSpec(id: OutputFormat): FormatSpec {
-  const spec = FORMATS.find((f) => f.id === id);
-  if (!spec) throw new Error(`Unknown output format: ${id}`);
-  return spec;
+  return FORMAT_BY_ID[id];
 }
 
 export function isFormatAvailable(id: OutputFormat, isStatic: boolean): boolean {

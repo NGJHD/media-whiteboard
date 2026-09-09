@@ -24,6 +24,7 @@ const outDir = path.join(root, 'resources', '.download', 'smoke');
 fs.mkdirSync(outDir, { recursive: true });
 
 const ffprobe = path.join(root, 'resources', 'bin', 'ffprobe.exe');
+const ffmpeg = path.join(root, 'resources', 'bin', 'ffmpeg.exe');
 
 // Overridable so the same harness can measure throughput at a realistic canvas
 // size, and so the size estimate can be calibrated per quality.
@@ -88,6 +89,29 @@ if (formats.includes('mp4')) {
     outputPath: path.join(outDir, 'smoke-odd.mp4'),
     label: 'mp4 (odd canvas)',
   });
+
+  // encoder.ts's mp4Filters() `-filter_complex` branch (composite over black,
+  // then discard alpha) only runs when the document has transparency. It is
+  // otherwise untested here — the base mp4 case above never sets `transparent`,
+  // so it only ever exercises the `-vf` branch. Exercise the alpha-composited
+  // branch directly: __mwProbe leaves the right half of the frame fully
+  // transparent (gradientProbe.ts), and this asserts that region decodes to
+  // black rather than keeping the gradient colour alpha was supposed to hide.
+  CASES.push({
+    format: 'mp4',
+    codec: 'h264',
+    width: W,
+    height: H,
+    expectWidth: even(W),
+    expectHeight: even(H),
+    fps: num('MW_FPS', 25),
+    frameCount: 10,
+    expectFrames: 10,
+    quality: QUALITY,
+    outputPath: path.join(outDir, 'smoke-transparent.mp4'),
+    label: 'mp4 (transparent)',
+    transparent: true,
+  });
 }
 
 // Pick any free port: vite.config.ts pins 5273 with strictPort for dev, and the
@@ -114,6 +138,7 @@ for (const testCase of CASES) {
     format: testCase.format,
     quality: testCase.quality,
     outputPath: testCase.outputPath,
+    transparent: testCase.transparent ?? false,
   })})`;
 
   process.stdout.write(`\n=== ${testCase.label ?? testCase.format} ===\n`);
@@ -135,6 +160,7 @@ for (const testCase of CASES) {
   );
 
   if (!verify(testCase)) failures += 1;
+  if (testCase.transparent && !verifyTransparentRegion(testCase)) failures += 1;
 }
 
 await Promise.all(contexts.map((c) => c.dispose()));
@@ -230,4 +256,33 @@ function verify(testCase) {
     console.log(`  ${pass ? 'ok  ' : 'FAIL'} ${label}: ${actual}${pass ? '' : ` (expected ${expected})`}`);
   }
   return ok;
+}
+
+/**
+ * Guards encoder.ts's `-filter_complex` branch (mp4Filters, transparent case):
+ * decodes a 4x4 patch from well inside the right half of the frame — the half
+ * gradientProbe.ts leaves fully transparent when `transparent: true` — and
+ * asserts it composited to black. A colour other than 0,0,0 there means alpha
+ * was dropped instead of composited, which is the exact regression this guards.
+ */
+function verifyTransparentRegion(testCase) {
+  const x = Math.floor(testCase.expectWidth * 0.75);
+  const y = Math.floor(testCase.expectHeight / 2);
+
+  const raw = execFileSync(ffmpeg, [
+    '-v', 'error',
+    '-i', testCase.outputPath,
+    '-vf', `crop=4:4:${x}:${y}`,
+    '-frames:v', '1',
+    '-f', 'rawvideo',
+    '-pix_fmt', 'rgb24',
+    '-',
+  ]);
+
+  const [r, g, b] = raw;
+  const pass = r === 0 && g === 0 && b === 0;
+  console.log(
+    `  ${pass ? 'ok  ' : 'FAIL'} transparent region RGB: ${r} ${g} ${b}${pass ? '' : ' (expected 0 0 0)'}`,
+  );
+  return pass;
 }

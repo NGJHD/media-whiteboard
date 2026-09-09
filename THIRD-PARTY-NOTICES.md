@@ -22,7 +22,7 @@ FFmpeg is LGPL v2.1+ by default. This build is configured with `--enable-gpl`
 Together those make the resulting binaries **GPL v3**. The full licence text is
 reproduced in `LICENSE.ffmpeg.txt` alongside this file.
 
-Notable GPL components in this build: **libx264**, **libx265**, **libzimg**.
+Notable GPL components in this build: **libx264**, **libx265**, **libxvid**.
 
 **Corresponding source.** GPL redistribution requires the corresponding source to
 be available. It is at the upstream URL above, at the exact commit the build was

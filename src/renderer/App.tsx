@@ -32,7 +32,8 @@ export function App() {
         // name that does not exist yet. Seeded with `mutate` — the app
         // discovering where to write is not an edit the user can undo.
         const folder = settings.lastOutputDir ?? info.appFolder;
-        const unique = await window.api.uniqueOutputPath(`${folder}\\output.webp`);
+        const seedName = `output.${formatSpec(FALLBACK_FORMAT).extension}`;
+        const unique = await window.api.uniqueOutputPath(`${folder}\\${seedName}`);
         useStore.getState().mutate((draft) => {
           draft.outputPath = unique;
         });
@@ -194,6 +195,13 @@ export function App() {
         // to the next free name so Generate can be pressed again straight away.
         const folder = result.outputPath.replace(/[\\/][^\\/]*$/, '');
         void window.api.setSettings({ lastOutputDir: folder });
+        // Unlike the other two uniqueOutputPath().then() call sites (setFormat
+        // above, and the output-path field's own re-unique), this one needs no
+        // staleness guard: it is awaited here inside generate() while the export
+        // modal is still up, and setExportState(null) below only runs in this
+        // function's `finally`, after this await resolves. Nothing else in the
+        // app can change the document while this is in flight. The other two
+        // fire from live event handlers and have no such window.
         const next = await window.api.uniqueOutputPath(result.outputPath);
         useStore.getState().mutate((draft) => {
           draft.outputPath = next;

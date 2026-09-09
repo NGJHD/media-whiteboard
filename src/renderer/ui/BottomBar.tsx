@@ -3,7 +3,7 @@ import type { OutputFormat, Quality } from '../../shared/ipc';
 import { useStore } from '../state/store';
 import { autoFps, FPS_OPTIONS, planLoop } from '../scene/timing';
 import { estimateBytes } from '../export/exportScene';
-import { FORMATS, formatSpec, isFormatAvailable, withExtension } from '../../shared/formats';
+import { EXTENSION_PATTERN, FORMATS, formatSpec, isFormatAvailable, withExtension } from '../../shared/formats';
 import { IconInfo } from './icons';
 
 /** §12 asks for this warning once, not once per format change. */
@@ -59,8 +59,12 @@ export function BottomBar({ onGenerate }: { onGenerate(): void }) {
   async function browse() {
     const chosen = await window.api.chooseOutputPath(doc.outputPath, doc.format);
     if (!chosen) return;
+    // The dialog's "All files" filter lets the user type a path with no
+    // extension, or one ffmpeg can't infer a muxer from. Force it back to the
+    // current format's rather than sending that to Generate and failing there.
+    const path = EXTENSION_PATTERN.test(chosen) ? chosen : withExtension(chosen, doc.format);
     apply('Output path', (draft) => {
-      draft.outputPath = chosen;
+      draft.outputPath = path;
     });
   }
 

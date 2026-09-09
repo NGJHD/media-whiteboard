@@ -21,6 +21,8 @@ export interface ProbeOptions {
   format: OutputFormat;
   quality: Quality;
   outputPath: string;
+  /** Exercises the `-filter_complex` (alpha-composited) branch of mp4Filters(). Default false. */
+  transparent?: boolean;
   onProgress?(phase: ExportPhase, progress: number): void;
   signal?: AbortSignal;
 }
@@ -30,6 +32,7 @@ function drawGradientFrame(
   width: number,
   height: number,
   t: number,
+  transparent: boolean,
 ): void {
   // t is 0..1 over exactly one loop, so frame 0 and frame N are continuous.
   const angle = t * Math.PI * 2;
@@ -59,10 +62,17 @@ function drawGradientFrame(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('Media Whiteboard', width / 2, height / 2);
+
+  // Leaves the right half fully transparent so a smoke test can confirm the
+  // encoder's alpha-composited branch actually drops alpha to black rather than
+  // discarding it.
+  if (transparent) {
+    ctx.clearRect(width / 2, 0, width / 2, height);
+  }
 }
 
 export async function encodeGradient(options: ProbeOptions): Promise<ExportResult> {
-  const { width, height, fps, frameCount, format, quality, outputPath } = options;
+  const { width, height, fps, frameCount, format, quality, outputPath, transparent = false } = options;
 
   const request: EncodeRequest = {
     width,
@@ -72,8 +82,7 @@ export async function encodeGradient(options: ProbeOptions): Promise<ExportResul
     format,
     quality,
     outputPath,
-    // The probe draws an opaque gradient; it is exercising the pipe, not alpha.
-    transparent: false,
+    transparent,
   };
 
   // §12: text metrics differ if fonts are not settled before the first frame.
@@ -91,7 +100,7 @@ export async function encodeGradient(options: ProbeOptions): Promise<ExportResul
     for (let i = 0; i < frameCount; i += 1) {
       if (options.signal?.aborted) return await handle.cancel();
 
-      drawGradientFrame(ctx, width, height, i / frameCount);
+      drawGradientFrame(ctx, width, height, i / frameCount, transparent);
 
       // getImageData returns a fresh buffer each call, so transferring it is safe.
       const { data } = ctx.getImageData(0, 0, width, height);

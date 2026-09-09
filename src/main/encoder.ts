@@ -7,16 +7,23 @@ import { binaries } from './ffmpeg';
 import type { EncodeRequest, ExportPhase } from '../shared/ipc';
 
 /**
- * The export encoder (CLAUDE.md §12).
+ * The export encoder (CLAUDE.md §12, and §3/§4 of
+ * docs/superpowers/specs/2026-09-08-mp4-png-output-formats.md for MP4/PNG).
  *
- * WebP is one pass: raw RGBA goes straight down ffmpeg's stdin.
+ * Four formats, two shapes of pipeline:
  *
- * GIF is three: the render loop writes raw frames to a scratch file, then
- * palettegen reads it, then paletteuse reads it again. palettegen must see every
- * frame before paletteuse can write the first one, and the render loop can only
- * produce the stream once — so the frames have to land somewhere. §12 requires
- * that somewhere to be disk, where the size can be bounds-checked, rather than
- * ffmpeg's RAM.
+ * WebP, MP4 and PNG are each one pass: raw RGBA goes straight down ffmpeg's
+ * stdin to a single `libwebp_anim` / `libx264` / `png` output. MP4 additionally
+ * runs a filter chain (`mp4Filters`) to pad odd dimensions and, when the
+ * document has alpha, composite over black before it is discarded — see that
+ * function's comment. PNG only ever receives one frame (static output only).
+ *
+ * GIF is three passes: the render loop writes raw frames to a scratch file,
+ * then palettegen reads it, then paletteuse reads it again. palettegen must see
+ * every frame before paletteuse can write the first one, and the render loop
+ * can only produce the stream once — so the frames have to land somewhere. §12
+ * requires that somewhere to be disk, where the size can be bounds-checked,
+ * rather than ffmpeg's RAM.
  */
 
 const BYTES_PER_PIXEL = 4; // rgba
@@ -130,7 +137,7 @@ function mp4Filters(request: EncodeRequest): string[] {
 export class Encoder {
   /** The process currently running, whichever pass it belongs to. Kill target. */
   private proc: ChildProcess | null = null;
-  /** The one-pass WebP encoder's stdin. Null for GIF, which writes to scratch. */
+  /** The one-pass encoder's stdin (WebP, MP4 or PNG). Null for GIF, which writes to scratch. */
   private pipe: NodeJS.WritableStream | null = null;
   private scratchStream: fs.WriteStream | null = null;
   private stderr = new StderrTail();
@@ -260,7 +267,16 @@ export class Encoder {
     if (!sink) throw new Error('Encoder is not started');
 
     if (!sink.write(frame)) {
-      await once(sink, 'drain');
+      // PNG's `-frames:v 1` means ffmpeg can legitimately exit after one frame.
+      // If it already has (or does, before drain fires), 'drain' never comes
+      // and this would hang forever with the export modal up and Cancel dead.
+      // Racing against the process's own 'close' event keeps that impossible
+      // even though only one frame ever reaches this branch today.
+      if (this.proc) {
+        await Promise.race([once(sink, 'drain'), once(this.proc, 'close')]);
+      } else {
+        await once(sink, 'drain');
+      }
     }
 
     this.framesWritten += 1;
