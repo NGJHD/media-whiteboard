@@ -18,11 +18,7 @@ single seamless loop — no timeline, no install, no dependencies.
 2. Unzip it anywhere you can write to — your Desktop, a USB stick, a project folder.
 3. Double-click **`MediaWhiteboard.exe`**.
 
-That's it. No installer, no admin rights, nothing written to the registry or to
-`%APPDATA%`. The app keeps its frame cache and settings in `cache/` and `data/`
-beside the exe, so deleting the folder removes every trace of it. (If the folder
-isn't writable — say you unzipped into `Program Files` — it falls back to your
-temp directory and says so in **About**.)
+That's it. 
 
 Requires Windows 11 x64.
 
@@ -49,39 +45,9 @@ The canvas animates live the whole time, so what you see is what gets exported.
 - **Transparency.** Turn the background off for a transparent WebP. (GIF alpha is
   1-bit, so soft edges go ragged — the app warns you.)
 - **Four output formats.** WebP and GIF always; MP4 (H.264) once something on the
-  canvas animates; PNG when nothing does. A format that doesn't apply is greyed
-  and says why in the list itself — `MP4 — needs animation` — rather than making
-  you hover. Quality greys out for PNG, because it's lossless. MP4 has
-  no transparency — the background flattens to black — and may come out one pixel
-  larger on an odd-sized canvas, because H.264 needs even dimensions and padding
-  beats cropping.
-- **Annotation tools.** Brush and eraser paint onto a raster layer above
-  everything; rectangles, ellipses and multi-line text are editable objects with
-  fonts, outlines and shadows. Double-click text to re-edit it in place.
-- **Undo everything.** Transforms, paint strokes, canvas resizes, background
-  changes — 100 levels deep.
+  canvas animates; PNG when nothing does.
 - **Projects.** `Ctrl+S` / `Ctrl+O` save and reload the whole document as
   `.mwproj`.
-- **Nothing blocks.** Imports decode in the background with their own progress
-  bars; you can keep working while they finish.
-
-### Shortcuts
-
-| Key | Action |
-|---|---|
-| `V` `B` `E` `T` `R` `O` | Select · Brush · Eraser · Text · Rectangle · Ellipse |
-| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
-| `Ctrl+A` | Select all |
-| `Ctrl+C` / `Ctrl+V` | Copy / paste (an image on the clipboard pastes as a new layer) |
-| `Ctrl+S` / `Ctrl+O` | Save / open project |
-| `Delete` | Delete selection |
-| Arrows / `Shift`+Arrows | Nudge 1 px / 10 px |
-| `Shift` while resizing | Free the aspect ratio (shapes only) · snap rotation to 15° |
-| `Ctrl` while dragging | Suspend snapping |
-| `Alt`+click | Cycle through overlapping objects |
-| `Esc` | Deselect, or cancel a text edit |
-
-There is no zoom or pan: the canvas is always fitted to the window.
 
 ### Updating
 
