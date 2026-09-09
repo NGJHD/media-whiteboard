@@ -134,11 +134,17 @@ export function BottomBar({ onGenerate }: { onGenerate(): void }) {
         <label className="field">
           Format
           <select value={doc.format} onChange={(e) => setFormat(e.target.value as OutputFormat)}>
-            {FORMATS.map((f) => (
-              <option key={f.id} value={f.id} disabled={!isFormatAvailable(f.id, plan.isStatic)}>
-                {f.label}
-              </option>
-            ))}
+            {FORMATS.map((f) => {
+              const available = isFormatAvailable(f.id, plan.isStatic);
+              return (
+                <option key={f.id} value={f.id} disabled={!available}>
+                  {/* The note carries the reason in the text. How far a browser
+                      dims a disabled option is outside this app's control — the
+                      list is rendered by the OS, not the page. */}
+                  {available || !f.unavailableNote ? f.label : `${f.label} — ${f.unavailableNote}`}
+                </option>
+              );
+            })}
           </select>
         </label>
         {unavailable.length > 0 ? (

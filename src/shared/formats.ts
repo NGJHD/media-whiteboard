@@ -25,6 +25,17 @@ export interface FormatSpec {
   supportsAlpha: boolean;
   /** Why this format is currently unavailable. Null when always available. */
   requirement: string | null;
+  /**
+   * The same thing in two or three words, appended to the option's own label
+   * while it is unavailable.
+   *
+   * A native `<select>` renders its option list outside the page, so how far a
+   * browser dims `option:disabled` is not something this app controls — and
+   * Chromium's default is barely a shade. Putting the reason in the text makes
+   * the distinction survive regardless, and puts it where the eye already is
+   * instead of behind a hover.
+   */
+  unavailableNote: string | null;
 }
 
 /**
@@ -42,6 +53,7 @@ const FORMAT_BY_ID: Record<OutputFormat, FormatSpec> = {
     supportsQuality: true,
     supportsAlpha: true,
     requirement: null,
+    unavailableNote: null,
   },
   gif: {
     id: 'gif',
@@ -51,6 +63,7 @@ const FORMAT_BY_ID: Record<OutputFormat, FormatSpec> = {
     supportsQuality: true,
     supportsAlpha: true,
     requirement: null,
+    unavailableNote: null,
   },
   mp4: {
     id: 'mp4',
@@ -60,6 +73,7 @@ const FORMAT_BY_ID: Record<OutputFormat, FormatSpec> = {
     supportsQuality: true,
     supportsAlpha: false,
     requirement: 'MP4 needs at least one animated layer on the canvas.',
+    unavailableNote: 'needs animation',
   },
   png: {
     id: 'png',
@@ -69,6 +83,7 @@ const FORMAT_BY_ID: Record<OutputFormat, FormatSpec> = {
     supportsQuality: false,
     supportsAlpha: true,
     requirement: 'PNG is available only while nothing on the canvas animates.',
+    unavailableNote: 'static only',
   },
 };
 

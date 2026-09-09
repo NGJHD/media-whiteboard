@@ -129,8 +129,15 @@ input, select, textarea { user-select: text; }
   flex: 0 0 auto;
 }
 .field-hint svg { width: 14px; height: 14px; }
-.field.disabled { opacity: 0.5; }
-.field.disabled select { cursor: not-allowed; }
+/* Chromium's default disabled-option colour sits only a shade below an enabled
+   one, so an unavailable format read as available-but-slightly-off. Stated
+   explicitly, well below --muted. The option's label also carries the reason,
+   because the dropdown list is drawn by the OS and this rule is not guaranteed
+   to reach it. */
+select option:disabled { color: #5a616d; }
+
+.field.disabled { opacity: 0.45; }
+.field.disabled select { cursor: not-allowed; color: var(--muted); background: #191b1f; }
 
 input[type='text'], input:not([type]), input[type='number'], select, textarea {
   font: inherit;
