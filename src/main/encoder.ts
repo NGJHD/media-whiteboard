@@ -140,6 +140,13 @@ export class Encoder {
   /** The one-pass encoder's stdin (WebP, MP4 or PNG). Null for GIF, which writes to scratch. */
   private pipe: NodeJS.WritableStream | null = null;
   private scratchStream: fs.WriteStream | null = null;
+  /**
+   * Settles when the one-pass encoder exits. Created once per encode, not once
+   * per frame: `writeFrame` races it against 'drain', and `events.once` gives no
+   * way to cancel the loser — so a fresh promise per backpressured frame would
+   * leave a stray 'close' listener behind on every one of them.
+   */
+  private encoderExit: Promise<unknown> | null = null;
   private stderr = new StderrTail();
   private cancelled = false;
   private framesWritten = 0;
@@ -178,6 +185,10 @@ export class Encoder {
     const proc = spawn(ffmpeg, args, { stdio: ['pipe', 'ignore', 'pipe'] });
     this.proc = proc;
     this.pipe = proc.stdin;
+    // Attached once, here, rather than per frame. The rejection is swallowed
+    // because this promise exists only to unblock a drain wait — `awaitExit`
+    // is what reports the real failure.
+    this.encoderExit = once(proc, 'close').catch(() => undefined);
     this.stderr.attach(proc.stderr);
     proc.stdin.on('error', () => {
       // ffmpeg exiting early closes the pipe; the exit code is the real error.
@@ -270,10 +281,12 @@ export class Encoder {
       // PNG's `-frames:v 1` means ffmpeg can legitimately exit after one frame.
       // If it already has (or does, before drain fires), 'drain' never comes
       // and this would hang forever with the export modal up and Cancel dead.
-      // Racing against the process's own 'close' event keeps that impossible
-      // even though only one frame ever reaches this branch today.
-      if (this.proc) {
-        await Promise.race([once(sink, 'drain'), once(this.proc, 'close')]);
+      // Racing the shared `encoderExit` keeps that impossible even though only
+      // one frame ever reaches this branch today. GIF has no encoder running
+      // while frames are written — they go to the scratch file — so it waits on
+      // drain alone.
+      if (this.encoderExit) {
+        await Promise.race([once(sink, 'drain'), this.encoderExit]);
       } else {
         await once(sink, 'drain');
       }
