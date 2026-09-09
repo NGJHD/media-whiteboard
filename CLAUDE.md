@@ -744,12 +744,19 @@ warning.
 `-loop 0` is not passed and no UI mentions it.
 
 **The format list depends on the document.** MP4 needs motion; PNG is for its
-absence. Unavailable formats are shown disabled with a stated reason, never
-hidden, and a selection that goes stale falls back to WebP — rewriting the
-extension, re-uniquing the path and toasting. Enforce that from the document in
-one place: a layer can arrive or leave by a drop, a delete, an undo or a project
-load, and only one of those goes through the dropdown. It is not an undoable
-edit.
+absence. Unavailable formats are shown disabled, never hidden, and a selection
+that goes stale falls back to WebP — rewriting the extension, re-uniquing the
+path and toasting. Enforce that from the document in one place: a layer can
+arrive or leave by a drop, a delete, an undo or a project load, and only one of
+those goes through the dropdown. It is not an undoable edit.
+
+**The reason travels in the option's own label**, not only in a tooltip:
+`MP4 — needs animation`, `PNG — static only`. A native `<select>` renders its
+list through the OS, so how far a browser dims `option:disabled` is not
+something this app controls — Chromium's default sits barely a shade below an
+enabled option. The colour is stated explicitly as well, but the text is what
+makes the distinction survive. The full sentence stays in the info affordance
+beside the dropdown.
 
 **WebP is one pass**: the base command above, straight from the render loop's stdin.
 

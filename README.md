@@ -49,8 +49,9 @@ The canvas animates live the whole time, so what you see is what gets exported.
 - **Transparency.** Turn the background off for a transparent WebP. (GIF alpha is
   1-bit, so soft edges go ragged — the app warns you.)
 - **Four output formats.** WebP and GIF always; MP4 (H.264) once something on the
-  canvas animates; PNG when nothing does. Formats that don't apply are greyed
-  with the reason, and Quality greys out for PNG because it's lossless. MP4 has
+  canvas animates; PNG when nothing does. A format that doesn't apply is greyed
+  and says why in the list itself — `MP4 — needs animation` — rather than making
+  you hover. Quality greys out for PNG, because it's lossless. MP4 has
   no transparency — the background flattens to black — and may come out one pixel
   larger on an odd-sized canvas, because H.264 needs even dimensions and padding
   beats cropping.
