@@ -1,5 +1,7 @@
 # Media Whiteboard
 
+<img width="631" height="320" alt="project-mediawhiteboard" src="https://github.com/user-attachments/assets/422a89cf-ef85-49f3-9213-4b250a1b5f54" />
+
 A portable Windows desktop app for compositing animated and static media onto a
 canvas and exporting an infinitely-looping animated **WebP**, **GIF** or **MP4** —
 or a single **PNG** when nothing moves.
