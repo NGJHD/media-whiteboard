@@ -18,6 +18,12 @@ import { useStore, worldToScreen } from '../state/store';
  * hide what was just typed, and the height is auto-computed from the wrapped
  * result anyway (§10) — so the editor measures its own content every keystroke
  * and matches its height to it.
+ *
+ * "Click away" is a pointer landing outside both the editor and the options row
+ * (§9 shows the text's own properties while this is open). Blur alone is not
+ * that: reaching for the font picker or the colour swatch moves focus out of the
+ * textarea without meaning to finish the text, and committing there would close
+ * the editor on the way to restyling it.
  */
 export function TextEditor() {
   const editingId = useStore((s) => s.editingTextId);
@@ -35,11 +41,16 @@ export function TextEditor() {
 
   const [value, setValue] = useState('');
   const [initial, setInitial] = useState('');
+  // The pointer-outside listener below and a blur can both land on the same
+  // gesture; the second one would commit an object that is already gone.
+  const done = useRef(false);
+  const commitRef = useRef<(next: string) => void>(() => {});
 
   useEffect(() => {
     if (!object) return;
     setValue(object.text);
     setInitial(object.text);
+    done.current = false;
   }, [object?.id]);
 
   useLayoutEffect(() => {
@@ -56,6 +67,23 @@ export function TextEditor() {
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
   }, [value, view.scale, object?.fontSize, object?.boxWidth, object?.fontFamily]);
+
+  // Once focus has gone to a control in the options row the textarea will not
+  // blur again, so the click that finishes the text has to be caught directly.
+  // Capture phase and `pointerdown`, both so that this runs before the canvas
+  // turns the same press into a selection.
+  useEffect(() => {
+    if (!object) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (ref.current && (target === ref.current || ref.current.contains(target))) return;
+      if (target.closest?.('.options')) return;
+      commitRef.current(value);
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, [object?.id, value]);
 
   if (!object) return null;
 
@@ -78,6 +106,8 @@ export function TextEditor() {
    *   been emptied.
    */
   function commit(next: string) {
+    if (done.current) return;
+    done.current = true;
     const store = useStore.getState();
     const measured = ref.current?.scrollHeight;
     const height = measured ? measured / view.scale : object!.height;
@@ -115,6 +145,8 @@ export function TextEditor() {
     store.setEditingText(null);
   }
 
+  commitRef.current = commit;
+
   const topLeft = worldToScreen(
     view,
     object.x - object.boxWidth / 2,
@@ -129,7 +161,14 @@ export function TextEditor() {
       spellCheck={false}
       rows={1}
       onChange={(e) => setValue(e.target.value)}
-      onBlur={() => commit(value)}
+      onBlur={(e) => {
+        // Focus moving into the options row is the user restyling this very
+        // text, not leaving it. The editor stays open, unfocused, until the
+        // pointer lands somewhere that really does end it.
+        const next = e.relatedTarget as HTMLElement | null;
+        if (next?.closest?.('.options')) return;
+        commit(value);
+      }}
       onKeyDown={(e) => {
         // Enter inserts a newline: text is multi-line (§10).
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -151,6 +190,8 @@ export function TextEditor() {
         fontSize: object.fontSize * view.scale,
         fontWeight: object.fontStyle.includes('bold') ? 700 : 400,
         fontStyle: object.fontStyle.includes('italic') ? 'italic' : 'normal',
+        textDecoration: object.underline ? 'underline' : 'none',
+        textAlign: object.align,
         lineHeight: 1.2,
         color: object.color,
         transform: `rotate(${object.rotation}deg)`,

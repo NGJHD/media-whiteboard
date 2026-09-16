@@ -230,7 +230,17 @@ button.ghost { background: transparent; }
 .iconbtn .icon { display: block; }
 
 .toggles { display: flex; gap: 4px; flex: 0 0 auto; }
-.toggle { width: 28px; padding: 6px 0; text-align: center; }
+/* Holds a letter (B, I, U) or a 14 px glyph (the alignments), so it centres
+   both rather than relying on the line box. */
+.toggle {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
 .toggle.active { background: #2f5c96; border-color: #3d6ea8; }
 
 .inline-error {

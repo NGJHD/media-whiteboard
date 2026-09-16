@@ -1,18 +1,32 @@
 import { useEffect, useState } from 'react';
-import type { MediaObject, SceneObject, ShapeObject, TextObject } from '../../shared/doc';
+import type {
+  LayerId,
+  MediaObject,
+  SceneObject,
+  ShapeObject,
+  TextAlign,
+  TextObject,
+} from '../../shared/doc';
 import { clearPaint } from '../actions/canvasActions';
 import { clampObjectToWorld } from '../actions/objectActions';
 import { useStore, type Tool } from '../state/store';
 import { useToolDefaults } from '../state/toolDefaults';
+import { IconAlignCenter, IconAlignLeft, IconAlignRight } from './icons';
 
 /**
- * §9 options section. One strip, three states, in this precedence:
+ * §9 options section. One strip, four states, in this precedence:
  *
+ * 0. A text is open in the in-place editor -> that text's own properties.
  * 1. A drawing tool is active -> that tool's creation options, which become the
  *    defaults for the next object drawn.
  * 2. Select with a selection -> the properties of the selected object(s),
  *    live-editable, one undo entry per edit.
  * 3. Select with nothing selected -> empty.
+ *
+ * State 0 comes first because placing a text switches back to Select with
+ * nothing selected (§10), so on states 1-3 alone the row would empty at the
+ * exact moment the user started typing — leaving the font, size and colour of
+ * the text being written as the one thing on screen that could not be changed.
  *
  * It is the only part of the top bar that scrolls: at the 1280 px minimum window
  * width the Text tool's controls are wider than the space left over, and the
@@ -21,12 +35,15 @@ import { useToolDefaults } from '../state/toolDefaults';
 export function OptionsRow() {
   const tool = useStore((s) => s.tool);
   const selection = useStore((s) => s.selection);
+  const editingTextId = useStore((s) => s.editingTextId);
   const doc = useStore((s) => s.doc);
+
+  if (editingTextId !== null) return <EditingTextProperties id={editingTextId} />;
 
   if (tool !== 'select') return <ToolOptions />;
 
   const selected = doc.objects.filter((o) => selection.includes(o.id));
-  if (!hasOptions('select', selected)) return <div className="options" />;
+  if (!hasOptions('select', selected, false)) return <div className="options" />;
 
   return <SelectionProperties objects={selected} />;
 }
@@ -39,7 +56,12 @@ export function OptionsRow() {
  * mistake. Shared rather than re-derived there, because the three states above
  * are the definition and two copies of them would drift.
  */
-export function hasOptions(tool: Tool, selected: SceneObject[]): boolean {
+export function hasOptions(
+  tool: Tool,
+  selected: SceneObject[],
+  editingText: boolean,
+): boolean {
+  if (editingText) return true;
   if (tool !== 'select') return true;
   if (selected.length === 0) return false;
   // A mix of kinds has nothing in common (§9).
@@ -150,53 +172,24 @@ function ToolOptions() {
   if (tool === 'text') {
     return (
       <div className="options">
-        <FontPicker value={defaults.fontFamily} onChange={(v) => defaults.set({ fontFamily: v })} />
-        <label className="field">
-          Size
-          <input
-            className="tiny"
-            type="number"
-            min={4}
-            max={512}
-            value={defaults.fontSize}
-            onChange={(e) => defaults.set({ fontSize: Number(e.target.value) })}
-          />
-        </label>
-        <StyleToggles
-          style={defaults.fontStyle}
-          onChange={(fontStyle) => defaults.set({ fontStyle })}
+        <TextControls
+          values={{
+            fontFamily: defaults.fontFamily,
+            fontSize: defaults.fontSize,
+            fontStyle: defaults.fontStyle,
+            underline: defaults.underline,
+            align: defaults.align,
+            color: defaults.textColor,
+            outline: defaults.outline !== null,
+            shadow: defaults.shadow !== null,
+          }}
+          onChange={(patch) => {
+            // The defaults store spells the text colour `textColor`, because it
+            // also holds a brush colour and a stroke colour.
+            const { color, ...rest } = patch;
+            defaults.set(color === undefined ? rest : { ...rest, textColor: color });
+          }}
         />
-        <label className="field">
-          Colour
-          <input
-            type="color"
-            className="swatch"
-            value={defaults.textColor}
-            onChange={(e) => defaults.set({ textColor: e.target.value })}
-          />
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={defaults.outline !== null}
-            onChange={(e) => defaults.set({ outline: e.target.checked ? { color: '#000000', width: 2 } : null })}
-          />
-          Outline
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={defaults.shadow !== null}
-            onChange={(e) =>
-              defaults.set({
-                shadow: e.target.checked
-                  ? { color: '#000000', blur: 6, offsetX: 2, offsetY: 2 }
-                  : null,
-              })
-            }
-          />
-          Shadow
-        </label>
       </div>
     );
   }
@@ -316,96 +309,80 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
   }
 
   const texts = objects as TextObject[];
-  const fontFamily = shared(texts, (o) => (o as TextObject).fontFamily);
-  const fontSize = shared(texts, (o) => (o as TextObject).fontSize);
-  const fontStyle = shared(texts, (o) => (o as TextObject).fontStyle);
-  const color = shared(texts, (o) => (o as TextObject).color);
-  const hasOutline = shared(texts, (o) => (o as TextObject).outline !== null);
-  const hasShadow = shared(texts, (o) => (o as TextObject).shadow !== null);
 
   return (
     <div className="options">
-      <FontPicker
-        value={fontFamily ?? ''}
-        onChange={(v) =>
-          update('Font', (o) => {
-            if (o.kind === 'text') o.fontFamily = v;
-          })
-        }
+      <TextControls
+        values={{
+          fontFamily: shared(texts, (o) => (o as TextObject).fontFamily),
+          fontSize: shared(texts, (o) => (o as TextObject).fontSize),
+          fontStyle: shared(texts, (o) => (o as TextObject).fontStyle),
+          underline: shared(texts, (o) => (o as TextObject).underline),
+          align: shared(texts, (o) => (o as TextObject).align),
+          color: shared(texts, (o) => (o as TextObject).color),
+          outline: shared(texts, (o) => (o as TextObject).outline !== null),
+          shadow: shared(texts, (o) => (o as TextObject).shadow !== null),
+        }}
+        onChange={(patch, label) => {
+          update(label, (o) => {
+            if (o.kind === 'text') Object.assign(o, patch);
+          });
+        }}
       />
-      <label className="field">
-        Size
-        <input
-          className="tiny"
-          type="number"
-          min={4}
-          max={512}
-          value={fontSize ?? ''}
-          placeholder="—"
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            update('Font size', (o) => {
-              if (o.kind === 'text') o.fontSize = v;
-            });
-          }}
-        />
-      </label>
-      <StyleToggles
-        style={fontStyle ?? ''}
-        onChange={(v) =>
-          update('Font style', (o) => {
-            if (o.kind === 'text') o.fontStyle = v;
-          })
-        }
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* 0. The text being edited in place (§9 precedence, §10)                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The properties of the text the in-place editor is open on.
+ *
+ * A freshly placed text is not in the document yet — it is `pendingText` until
+ * it commits with content (§10) — so an edit to it cannot be an undo entry:
+ * the whole insertion is one `Add text` or nothing at all. An existing text
+ * being re-edited is an ordinary document object and behaves like any other
+ * selection, one undo entry per control.
+ */
+function EditingTextProperties({ id }: { id: LayerId }) {
+  const pending = useStore((s) => (s.pendingText?.id === id ? s.pendingText : null));
+  const existing = useStore((s) => s.doc.objects.find((o) => o.id === id));
+  const object = pending ?? (existing?.kind === 'text' ? existing : null);
+
+  if (!object) return <div className="options" />;
+
+  return (
+    <div className="options">
+      <TextControls
+        values={{
+          fontFamily: object.fontFamily,
+          fontSize: object.fontSize,
+          fontStyle: object.fontStyle,
+          underline: object.underline,
+          align: object.align,
+          color: object.color,
+          outline: object.outline !== null,
+          shadow: object.shadow !== null,
+        }}
+        onChange={(patch, label) => {
+          const store = useStore.getState();
+          // Read the pending text back rather than patching the copy this
+          // render closed over: two presses land inside one render often
+          // enough — underline then centre — and the second would carry the
+          // object as it was before the first.
+          const current = store.pendingText?.id === id ? store.pendingText : null;
+          if (current) {
+            store.setPendingText({ ...current, ...patch });
+            return;
+          }
+          store.apply(label, (draft) => {
+            const target = draft.objects.find((o) => o.id === id);
+            if (target?.kind === 'text') Object.assign(target, patch);
+          });
+        }}
       />
-      <label className="field">
-        Colour
-        <input
-          type="color"
-          className="swatch"
-          value={color ?? '#000000'}
-          onChange={(e) => {
-            const v = e.target.value;
-            update('Text colour', (o) => {
-              if (o.kind === 'text') o.color = v;
-            });
-          }}
-        />
-      </label>
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          ref={(el) => {
-            if (el) el.indeterminate = hasOutline === null;
-          }}
-          checked={hasOutline === true}
-          onChange={(e) => {
-            const on = e.target.checked;
-            update('Outline', (o) => {
-              if (o.kind === 'text') o.outline = on ? { color: '#000000', width: 2 } : null;
-            });
-          }}
-        />
-        Outline
-      </label>
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          ref={(el) => {
-            if (el) el.indeterminate = hasShadow === null;
-          }}
-          checked={hasShadow === true}
-          onChange={(e) => {
-            const on = e.target.checked;
-            update('Shadow', (o) => {
-              if (o.kind === 'text') {
-                o.shadow = on ? { color: '#000000', blur: 6, offsetX: 2, offsetY: 2 } : null;
-              }
-            });
-          }}
-        />
-        Shadow
-      </label>
     </div>
   );
 }
@@ -501,34 +478,188 @@ function MediaSize({ object }: { object: MediaObject }) {
 /* Shared controls                                                            */
 /* -------------------------------------------------------------------------- */
 
-function StyleToggles({ style, onChange }: { style: string; onChange(v: string): void }) {
-  const bold = style.includes('bold');
-  const italic = style.includes('italic');
+/**
+ * Every text control, in one place.
+ *
+ * The three states that show them — the Text tool's defaults, a selection, and
+ * the text being edited in place — differ only in where the change lands, so
+ * they hand this a patch sink rather than a copy of the row. A `null` value is
+ * indeterminate: several objects are selected and they disagree (§9).
+ *
+ * `label` is the undo entry the change should make where one is made at all;
+ * the defaults store and a pending text ignore it.
+ */
+interface TextStyleValues {
+  fontFamily: string | null;
+  fontSize: number | null;
+  fontStyle: string | null;
+  underline: boolean | null;
+  align: TextAlign | null;
+  color: string | null;
+  outline: boolean | null;
+  shadow: boolean | null;
+}
 
-  function build(nextBold: boolean, nextItalic: boolean): string {
+type TextStylePatch = Partial<
+  Pick<
+    TextObject,
+    'fontFamily' | 'fontSize' | 'fontStyle' | 'underline' | 'align' | 'color' | 'outline' | 'shadow'
+  >
+>;
+
+const ALIGNMENTS: Array<{ value: TextAlign; label: string; icon: React.ReactNode }> = [
+  { value: 'left', label: 'Align left', icon: <IconAlignLeft /> },
+  { value: 'center', label: 'Align centre', icon: <IconAlignCenter /> },
+  { value: 'right', label: 'Align right', icon: <IconAlignRight /> },
+];
+
+function TextControls({
+  values,
+  onChange,
+}: {
+  values: TextStyleValues;
+  onChange(patch: TextStylePatch, label: string): void;
+}) {
+  const bold = values.fontStyle?.includes('bold') ?? false;
+  const italic = values.fontStyle?.includes('italic') ?? false;
+
+  function styleString(nextBold: boolean, nextItalic: boolean): string {
     const parts = [nextBold ? 'bold' : '', nextItalic ? 'italic' : ''].filter(Boolean);
     return parts.length === 0 ? 'normal' : parts.join(' ');
   }
 
   return (
-    <div className="toggles">
-      <button
-        className={bold ? 'toggle active' : 'toggle'}
-        style={{ fontWeight: 700 }}
-        onClick={() => onChange(build(!bold, italic))}
-        title="Bold"
-      >
-        B
-      </button>
-      <button
-        className={italic ? 'toggle active' : 'toggle'}
-        style={{ fontStyle: 'italic' }}
-        onClick={() => onChange(build(bold, !italic))}
-        title="Italic"
-      >
-        I
-      </button>
-    </div>
+    <>
+      <FontPicker
+        value={values.fontFamily ?? ''}
+        onChange={(v) => onChange({ fontFamily: v }, 'Font')}
+      />
+      <label className="field">
+        Size
+        <input
+          className="tiny"
+          type="number"
+          min={4}
+          max={512}
+          value={values.fontSize ?? ''}
+          placeholder="—"
+          onChange={(e) => onChange({ fontSize: Number(e.target.value) }, 'Font size')}
+        />
+      </label>
+
+      <div className="toggles">
+        <Toggle
+          active={bold}
+          label="Bold"
+          onClick={() => onChange({ fontStyle: styleString(!bold, italic) }, 'Font style')}
+        >
+          <span style={{ fontWeight: 700 }}>B</span>
+        </Toggle>
+        <Toggle
+          active={italic}
+          label="Italic"
+          onClick={() => onChange({ fontStyle: styleString(bold, !italic) }, 'Font style')}
+        >
+          <span style={{ fontStyle: 'italic' }}>I</span>
+        </Toggle>
+        <Toggle
+          active={values.underline === true}
+          label="Underline"
+          onClick={() => onChange({ underline: values.underline !== true }, 'Underline')}
+        >
+          <span style={{ textDecoration: 'underline' }}>U</span>
+        </Toggle>
+      </div>
+
+      <div className="toggles">
+        {ALIGNMENTS.map((a) => (
+          <Toggle
+            key={a.value}
+            active={values.align === a.value}
+            label={a.label}
+            onClick={() => onChange({ align: a.value }, 'Text alignment')}
+          >
+            {a.icon}
+          </Toggle>
+        ))}
+      </div>
+
+      <label className="field">
+        Colour
+        <input
+          type="color"
+          className="swatch"
+          value={values.color ?? '#000000'}
+          onChange={(e) => onChange({ color: e.target.value }, 'Text colour')}
+        />
+      </label>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          ref={(el) => {
+            if (el) el.indeterminate = values.outline === null;
+          }}
+          checked={values.outline === true}
+          onChange={(e) =>
+            onChange({ outline: e.target.checked ? { color: '#000000', width: 2 } : null }, 'Outline')
+          }
+        />
+        Outline
+      </label>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          ref={(el) => {
+            if (el) el.indeterminate = values.shadow === null;
+          }}
+          checked={values.shadow === true}
+          onChange={(e) =>
+            onChange(
+              {
+                shadow: e.target.checked
+                  ? { color: '#000000', blur: 6, offsetX: 2, offsetY: 2 }
+                  : null,
+              },
+              'Shadow',
+            )
+          }
+        />
+        Shadow
+      </label>
+    </>
+  );
+}
+
+/**
+ * A square on/off button in the options row.
+ *
+ * It refuses focus on mousedown, which is what lets these be pressed while the
+ * in-place text editor is open: the textarea commits when it loses focus (§10),
+ * so a button that took focus would close the editor it was meant to restyle.
+ */
+function Toggle({
+  active,
+  label,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  label: string;
+  onClick(): void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={active ? 'toggle active' : 'toggle'}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+    >
+      {children}
+    </button>
   );
 }
 

@@ -37,11 +37,31 @@ const scene = `
       id: 'demo-text', kind: 'text',
       x: 140, y: -250, width: 400, height: 64, rotation: 0, opacity: 1,
       text: 'Media Whiteboard', fontFamily: 'Segoe UI', fontSize: 56,
-      fontStyle: 'bold', color: '#ff3b30', outline: null, shadow: null,
+      fontStyle: 'bold', underline: false, align: 'left',
+      color: '#ff3b30', outline: null, shadow: null,
       boxWidth: 400,
     });
   });
 `;
+
+/**
+ * §10 in-place editing: one box, grown to fit three lines, no transformer.
+ * Shown twice, because §9 puts the text's own controls in the options row
+ * while this is open and they have to fit the 1280 px minimum too.
+ */
+const editingText = `
+    store.getState().setTool('select');
+    store.getState().setSelection(['demo-text']);
+    store.getState().setEditingText('demo-text');
+    await new Promise((r) => setTimeout(r, 200));
+    const ta = document.querySelector('textarea.text-editor');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    // Joined rather than written as an escape: this source goes through a
+    // template literal on its way to the renderer, which resolves the escape
+    // into a real newline and breaks the quoted string it sits inside.
+    setter.call(ta, ['Media Whiteboard', 'second line', 'third line'].join(String.fromCharCode(10)));
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  `;
 
 /** [name, activation, window size]. The narrow cases are the ones that matter. */
 const cases = [
@@ -54,20 +74,8 @@ const cases = [
   ['eraser', `store.getState().setTool('eraser');`],
   ['text', `store.getState().setTool('text');`],
   ['rect', `store.getState().setTool('rect');`],
-  // §10 in-place editing: one box, grown to fit three lines, no transformer.
-  ['text-editing', `
-    store.getState().setTool('select');
-    store.getState().setSelection(['demo-text']);
-    store.getState().setEditingText('demo-text');
-    await new Promise((r) => setTimeout(r, 200));
-    const ta = document.querySelector('textarea.text-editor');
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-    // Joined rather than written as an escape: this source goes through a
-    // template literal on its way to the renderer, which resolves the escape
-    // into a real newline and breaks the quoted string it sits inside.
-    setter.call(ta, ['Media Whiteboard', 'second line', 'third line'].join(String.fromCharCode(10)));
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
-  `],
+  ['text-editing', editingText],
+  ['text-editing-1280', editingText, '1280x720'],
   // §9: a selected media layer shows its source size and aspect-locked W/H.
   ['select-media', `
     store.getState().setTool('select');

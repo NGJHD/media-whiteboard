@@ -404,6 +404,236 @@ console.log('=== paint undo (§6, §11) ===');
   }
 }
 
+/* -- 5. The options row during a text edit, underline, alignment (§9, §10) -- */
+
+console.log('');
+console.log('=== text options while editing (§9, §10) ===');
+{
+  const r = await harness.run(`
+    (async () => {
+      const { placeText } = await import('/canvas/drawTools.ts');
+      const store = window.__mwStore;
+      const s = () => store.getState();
+      const settle = () => new Promise((r) => setTimeout(r, 60));
+
+      const type = (value) => {
+        const el = document.querySelector('.text-editor');
+        if (!el) throw new Error('no text editor on screen');
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(el, value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return el;
+      };
+      const button = (label) => {
+        const found = [...document.querySelectorAll('.options .toggle')]
+          .find((b) => b.getAttribute('aria-label') === label);
+        if (!found) throw new Error('no ' + label + ' button in the options row');
+        return found;
+      };
+      const pressCanvas = () => document.querySelector('.viewport')
+        .dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+
+      s().apply('reset', (d) => { d.objects = []; });
+      s().setTool('select');
+      s().setSelection([]);
+      await settle();
+      const emptyRow = document.querySelectorAll('.options *').length;
+      const undoBase = s().undoStack.length;
+
+      /* -- the reported bug: the row must not empty on the first keystroke -- */
+      placeText({ x: -100, y: -100 });
+      await settle();
+      const whileEditing = {
+        controls: document.querySelectorAll('.options *').length,
+        fontPicker: Boolean(document.querySelector('.options .font-picker')),
+        tool: s().tool,
+        selection: s().selection.length,
+      };
+
+      type('hello');
+      await settle();
+      const afterTyping = {
+        controls: document.querySelectorAll('.options *').length,
+        editorOpen: Boolean(document.querySelector('.text-editor')),
+      };
+
+      /* -- a toggle restyles the text without closing the editor ----------- */
+      const underline = button('Underline');
+      // preventDefault on mousedown: the button must refuse focus, or pressing
+      // it would blur the textarea and commit the text it is restyling.
+      const refusesFocus = !underline.dispatchEvent(
+        new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      underline.click();
+      button('Align centre').click();
+      await settle();
+      const editor = document.querySelector('.text-editor');
+      const afterStyling = {
+        editorOpen: Boolean(editor),
+        underline: s().pendingText?.underline,
+        align: s().pendingText?.align,
+        editorAlign: editor ? getComputedStyle(editor).textAlign : null,
+        editorDecoration: editor ? getComputedStyle(editor).textDecorationLine : null,
+        undoEntries: s().undoStack.length - undoBase,
+      };
+
+      /* -- focus into the options row is not leaving the text -------------- */
+      document.querySelector('.options input[type=color]').focus();
+      await settle();
+      const afterSwatch = { editorOpen: Boolean(document.querySelector('.text-editor')) };
+
+      /* -- a press on the canvas still finishes it ------------------------- */
+      pressCanvas();
+      await settle();
+      const placed = s().doc.objects[s().doc.objects.length - 1];
+      const afterCommit = {
+        editorOpen: Boolean(document.querySelector('.text-editor')),
+        text: placed?.text,
+        underline: placed?.underline,
+        align: placed?.align,
+        undoEntries: s().undoStack.length - undoBase,
+        label: s().undoStack[s().undoStack.length - 1]?.label,
+      };
+
+      /* -- an existing text being re-edited is an ordinary undo entry ------ */
+      s().setSelection([placed.id]);
+      s().setEditingText(placed.id);
+      await settle();
+      const reopened = Boolean(document.querySelector('.options .font-picker'));
+      button('Align right').click();
+      await settle();
+      const afterRealign = {
+        align: s().doc.objects.find((o) => o.id === placed.id)?.align,
+        label: s().undoStack[s().undoStack.length - 1]?.label,
+      };
+      store.getState().undo();
+      const afterUndo = s().doc.objects.find((o) => o.id === placed.id)?.align;
+
+      return { ok: true, emptyRow, whileEditing, afterTyping, refusesFocus,
+               afterStyling, afterSwatch, afterCommit, reopened, afterRealign, afterUndo };
+    })()
+  `);
+
+  if (!r.ok) {
+    c.fail(`text options: ${r.error}`);
+    for (const line of r.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.check('nothing selected leaves the row empty', r.emptyRow, 0);
+    // The bug: placing a text switches to Select with nothing selected (§10),
+    // which on the §9 rules alone empties the row the user is typing under.
+    c.truthy('the row shows the text controls while editing', r.whileEditing.controls > 0,
+      `${r.whileEditing.controls} controls`);
+    c.truthy('the font picker is among them', r.whileEditing.fontPicker);
+    c.check('placing still switches to Select', r.whileEditing.tool, 'select');
+    c.check('with nothing selected', r.whileEditing.selection, 0);
+    c.check('typing does not empty the row', r.afterTyping.controls, r.whileEditing.controls);
+    c.truthy('the editor is still open', r.afterTyping.editorOpen);
+
+    c.truthy('a toggle refuses focus', r.refusesFocus);
+    c.truthy('pressing one keeps the editor open', r.afterStyling.editorOpen);
+    c.check('underline and alignment reach the text',
+      [r.afterStyling.underline, r.afterStyling.align], [true, 'center']);
+    // The editor is styled to match what will be rendered (§10).
+    c.check('the editor matches', [r.afterStyling.editorAlign, r.afterStyling.editorDecoration],
+      ['center', 'underline']);
+    // A pending text is not in the document, so restyling it cannot be undone
+    // separately: the whole insertion is one entry.
+    c.check('restyling a pending text writes no undo entry', r.afterStyling.undoEntries, 0);
+
+    c.truthy('the colour swatch does not close the editor', r.afterSwatch.editorOpen);
+
+    c.truthy('a press on the canvas closes it', !r.afterCommit.editorOpen);
+    c.check('the text commits with its styling',
+      [r.afterCommit.text, r.afterCommit.underline, r.afterCommit.align],
+      ['hello', true, 'center']);
+    c.check('as a single Add text entry',
+      [r.afterCommit.undoEntries, r.afterCommit.label], [1, 'Add text']);
+
+    c.truthy('re-editing shows the controls again', r.reopened);
+    c.check('an existing text restyles through the document',
+      [r.afterRealign.align, r.afterRealign.label], ['right', 'Text alignment']);
+    c.check('and that is undoable on its own', r.afterUndo, 'center');
+  }
+}
+
+/* -- 6. Underline and alignment reach the exported pixels (§3, §12) -------- */
+
+console.log('');
+console.log('=== underline and alignment in the output (§3) ===');
+{
+  const aligned = {
+    left: path.join(workDir, 'text-left.webp'),
+    right: path.join(workDir, 'text-right.webp'),
+    underlined: path.join(workDir, 'text-underlined.webp'),
+  };
+  for (const f of Object.values(aligned)) fs.rmSync(f, { force: true });
+
+  const r = await harness.run(`
+    (async () => {
+      const { exportDocument } = await import('/export/exportScene.ts');
+      const store = window.__mwStore;
+      const s = () => store.getState();
+      const files = ${JSON.stringify(aligned)};
+
+      const write = async (out, patch) => {
+        s().apply('setup', (d) => {
+          d.canvasRect = { x: -160, y: -90, width: 320, height: 180 };
+          d.background = { transparent: false, color: '#ffffff' };
+          d.outputPath = out;
+          d.format = 'webp';
+          d.objects = [{
+            id: 't', kind: 'text', x: 0, y: 0, width: 300, height: 48,
+            rotation: 0, opacity: 1, text: 'MM', fontFamily: 'Segoe UI',
+            fontSize: 40, fontStyle: 'normal', underline: false, align: 'left',
+            color: '#ff0000', outline: null, shadow: null, boxWidth: 300,
+            ...patch,
+          }];
+        });
+        const res = await exportDocument({ doc: s().doc });
+        if (!res.ok) throw new Error(res.error);
+      };
+
+      await write(files.left, {});
+      await write(files.right, { align: 'right' });
+      await write(files.underlined, { underline: true });
+      return { ok: true };
+    })()
+  `);
+
+  if (!r.ok) {
+    c.fail(`text pixels: ${r.error}`);
+    for (const line of r.log ?? []) console.error(`    ${line}`);
+  } else {
+    const ink = (file) => {
+      const at = pixels(file, 320, 180);
+      let count = 0;
+      let sumX = 0;
+      for (let y = 0; y < 180; y += 1) {
+        for (let x = 0; x < 320; x += 1) {
+          const [red, green, blue] = at(x, y);
+          if (red > 140 && green < 110 && blue < 110) {
+            count += 1;
+            sumX += x;
+          }
+        }
+      }
+      return { count, meanX: count === 0 ? null : sumX / count };
+    };
+
+    const left = ink(aligned.left);
+    const right = ink(aligned.right);
+    const underlined = ink(aligned.underlined);
+
+    c.truthy('the text renders at all', left.count > 0, `${left.count} px`);
+    // Alignment moves the glyphs within boxWidth without moving the box.
+    c.truthy('right alignment moves the glyphs right',
+      left.meanX !== null && right.meanX !== null && right.meanX - left.meanX > 40,
+      `left ${Math.round(left.meanX ?? 0)} -> right ${Math.round(right.meanX ?? 0)}`);
+    c.truthy('underline adds ink under the glyphs', underlined.count > left.count,
+      `${left.count} -> ${underlined.count} px`);
+  }
+}
+
 await harness.stop();
 console.log('');
 console.log(c.failures === 0 ? 'All tool smoke tests passed.' : `${c.failures} failed.`);

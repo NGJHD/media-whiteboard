@@ -123,3 +123,57 @@ export function IconInfo() {
     </Glyph>
   );
 }
+
+/* Text alignment (§9 options row). Lucide's align-left / align-center /
+   align-right, at 14 px: they sit beside the B/I/U letter buttons, which are
+   text rather than 18 px glyphs. */
+
+function SmallGlyph({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      className="icon"
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {children}
+    </svg>
+  );
+}
+
+export function IconAlignLeft() {
+  return (
+    <SmallGlyph>
+      <path d="M21 6H3" />
+      <path d="M15 12H3" />
+      <path d="M17 18H3" />
+    </SmallGlyph>
+  );
+}
+
+export function IconAlignCenter() {
+  return (
+    <SmallGlyph>
+      <path d="M21 6H3" />
+      <path d="M17 12H7" />
+      <path d="M19 18H5" />
+    </SmallGlyph>
+  );
+}
+
+export function IconAlignRight() {
+  return (
+    <SmallGlyph>
+      <path d="M21 6H3" />
+      <path d="M21 12H9" />
+      <path d="M21 18H7" />
+    </SmallGlyph>
+  );
+}

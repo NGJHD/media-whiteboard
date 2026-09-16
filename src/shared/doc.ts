@@ -55,13 +55,25 @@ export interface ShapeObject extends BaseObject {
   fill: string | null;
 }
 
+/** Horizontal alignment of each wrapped line within `boxWidth`. */
+export type TextAlign = 'left' | 'center' | 'right';
+
 export interface TextObject extends BaseObject {
   kind: 'text';
   /** May contain newlines. */
   text: string;
   fontFamily: string;
   fontSize: number;
+  /** Weight and slant only: `normal`, `bold`, `italic`, `bold italic`. */
   fontStyle: string;
+  /**
+   * Kept apart from `fontStyle` because it is a different thing to the renderer:
+   * Konva takes weight and slant as `fontStyle` and underline as
+   * `textDecoration`, and a DOM textarea likewise. Folding them together would
+   * only mean splitting them again at both draw sites.
+   */
+  underline: boolean;
+  align: TextAlign;
   color: string;
   outline: { color: string; width: number } | null;
   shadow: { color: string; blur: number; offsetX: number; offsetY: number } | null;

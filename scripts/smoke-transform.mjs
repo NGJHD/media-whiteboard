@@ -248,7 +248,7 @@ console.log('=== double-click edits text (§10) ===');
         d.objects = [{
           id: 't', kind: 'text', x: 0, y: 0, width: 300, height: 60,
           rotation: 0, opacity: 1, text: 'edit me', fontFamily: 'Segoe UI',
-          fontSize: 40, fontStyle: 'normal', color: '#ff3b30',
+          fontSize: 40, fontStyle: 'normal', underline: false, align: 'left', color: '#ff3b30',
           outline: null, shadow: null, boxWidth: 300,
         }];
       });
@@ -363,7 +363,7 @@ console.log('=== corner-only resize handles (§10) ===');
           shape('a', 0, 0, 200, 100),
           { id: 't', kind: 'text', x: 250, y: 200, width: 200, height: 40,
             rotation: 0, opacity: 1, text: 'hi', fontFamily: 'Segoe UI',
-            fontSize: 30, fontStyle: 'normal', color: '#fff',
+            fontSize: 30, fontStyle: 'normal', underline: false, align: 'left', color: '#fff',
             outline: null, shadow: null, boxWidth: 200 },
         ];
       });

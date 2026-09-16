@@ -197,6 +197,12 @@ function buildText(obj: TextObject): Konva.Shape {
     fontFamily: obj.fontFamily,
     fontSize: obj.fontSize,
     fontStyle: obj.fontStyle,
+    // Konva's own name for underline. Empty string, not undefined: the Text
+    // node's default is '' and passing undefined logs a warning.
+    textDecoration: obj.underline ? 'underline' : '',
+    // Aligns each wrapped line inside `width`, which is boxWidth — so the box
+    // itself does not move and the geometry above is untouched.
+    align: obj.align,
     fill: obj.color,
     wrap: 'word',
     lineHeight: 1.2,

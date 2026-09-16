@@ -247,6 +247,8 @@ export function placeText(at: Point): TextObject {
     fontFamily: defaults.fontFamily,
     fontSize: defaults.fontSize,
     fontStyle: defaults.fontStyle,
+    underline: defaults.underline,
+    align: defaults.align,
     color: defaults.textColor,
     outline: defaults.outline,
     shadow: defaults.shadow,

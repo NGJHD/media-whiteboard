@@ -56,9 +56,11 @@ export function TopBar({ onAbout }: { onAbout(): void }) {
   const canUndo = useStore((s) => s.undoStack.length > 0);
   const canRedo = useStore((s) => s.redoStack.length > 0);
   const selection = useStore((s) => s.selection);
+  const editingTextId = useStore((s) => s.editingTextId);
   const showOptions = hasOptions(
     tool,
     doc.objects.filter((o) => selection.includes(o.id)),
+    editingTextId !== null,
   );
 
   // Local text state so a partially typed number does not resize the canvas on

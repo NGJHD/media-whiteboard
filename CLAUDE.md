@@ -187,7 +187,9 @@ interface ShapeObject extends BaseObject {
 interface TextObject extends BaseObject {
   kind: 'text';
   text: string;                     // may contain newlines
-  fontFamily: string; fontSize: number; fontStyle: string;
+  fontFamily: string; fontSize: number; fontStyle: string;  // weight/slant only
+  underline: boolean;               // Konva's textDecoration, not fontStyle
+  align: 'left' | 'center' | 'right';  // within boxWidth; the box does not move
   color: string;
   outline: { color: string; width: number } | null;
   shadow: { color: string; blur: number; offsetX: number; offsetY: number } | null;
@@ -468,8 +470,14 @@ Defaults: canvas **1280 × 720**, background solid **black**, fps **Auto**, qual
 
 ### The options row
 
-One row, three states, in this precedence:
+One row, four states, in this precedence:
 
+0. **A text is open in the in-place editor** → that text's properties, live-
+   editable, whether or not it is in the document yet. Placing a text switches
+   back to Select with nothing selected (§10), so on states 1-3 alone the row
+   would empty at the moment the user started typing — leaving the font, size
+   and colour of the text being written as the one thing on screen that could
+   not be changed.
 1. **A drawing tool is active** (Brush, Eraser, Text, Rect, Ellipse) → that tool's
    creation options, which become the defaults for the next object drawn.
 2. **Select is active with a selection** → the **properties of the selected
@@ -488,7 +496,7 @@ Per-kind properties, matching the fields in §5:
 |---|---|
 | Media | source size (read-only), width, height |
 | Shape | stroke color, stroke width, fill color, No fill |
-| Text | font family, size, bold, italic, color, outline, shadow |
+| Text | font family, size, bold, italic, underline, alignment, color, outline, shadow |
 | Mixed kinds | *(none — the section is empty)* |
 
 Media's width and height are **locked to the source aspect ratio**: typing one
@@ -582,8 +590,14 @@ join. Interpolate between pointer events so fast strokes don't gap.
 ### Text
 
 - Click to place, then edit **in place** via a positioned DOM `<textarea>` overlaid on
-  the canvas and styled to match. Commit on blur or `Ctrl+Enter`; cancel on `Esc`.
+  the canvas and styled to match. Commit on `Ctrl+Enter` or a click away; cancel on `Esc`.
 - **Double-click an existing text object to edit it.**
+- **"Click away" is a pointer landing outside both the editor and the options
+  row**, not a blur. Reaching for the font picker or the colour swatch takes
+  focus out of the textarea without meaning to finish the text, and committing
+  there would close the editor on the way to restyling it. Catch the press
+  itself; a control that can be pressed without taking focus at all (the
+  bold/italic/underline/alignment buttons) is better still.
 - While the editor is open it is the **only** box on screen: hide the Konva text
   node, the selection outline and the transform handles. Two rectangles of
   different sizes stacked on each other read as a bug, not as an editor.
@@ -592,8 +606,10 @@ join. Interpolate between pointer events so fast strokes don't gap.
   content and matches. On commit the **top edge** stays put — the model stores a
   centre, so writing a taller height without moving it would jump the finished
   text upward the moment the editor closed.
-- Options: system font family, size, style (bold/italic), color, optional outline,
-  optional shadow.
+- Options: system font family, size, style (bold/italic/underline), alignment
+  (left/center/right), color, optional outline, optional shadow.
+- **Alignment positions each wrapped line inside `boxWidth`.** The box itself
+  does not move, so none of the reflow geometry below changes with it.
 - **Resize reflows**: dragging a corner changes `boxWidth` and the text re-wraps;
   height is always auto-computed from the wrapped result, so only the horizontal
   component of the drag is used. Glyph size is changed only via the font-size

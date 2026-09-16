@@ -419,6 +419,11 @@ export const useStore = create<State>((set, get) => ({
     const missingFonts = new Set<string>();
     for (const obj of kept) {
       if (obj.kind !== 'text') continue;
+      // Underline and alignment postdate the first project files, and a text
+      // object written before them has neither. Filled in here rather than at
+      // each draw site, so everything downstream can rely on the type.
+      obj.underline ??= false;
+      obj.align ??= 'left';
       if (available.length > 0 && !available.includes(obj.fontFamily)) {
         missingFonts.add(obj.fontFamily);
         obj.fontFamily = available.includes('Segoe UI') ? 'Segoe UI' : (available[0] ?? obj.fontFamily);

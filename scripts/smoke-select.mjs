@@ -278,6 +278,7 @@ console.log('=== group resize maths (§10) ===');
         { ...mk('a', 100, 100, 100, 100), strokeWidth: 4, rotation: 30 },
         { id: 't', kind: 'text', x: 300, y: 100, width: 200, height: 50, rotation: 0,
           opacity: 1, text: 'hi', fontFamily: 'Segoe UI', fontSize: 20, fontStyle: 'normal',
+          underline: false, align: 'left',
           color: '#fff', outline: null, shadow: null, boxWidth: 200 },
       ];
     });

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { TextAlign } from '../../shared/doc';
 
 /**
  * §9: a drawing tool's options "become the defaults for the next object drawn".
@@ -19,6 +20,8 @@ export interface ToolDefaults {
   fontFamily: string;
   fontSize: number;
   fontStyle: string;
+  underline: boolean;
+  align: TextAlign;
   textColor: string;
   outline: { color: string; width: number } | null;
   shadow: { color: string; blur: number; offsetX: number; offsetY: number } | null;
@@ -38,6 +41,8 @@ export const useToolDefaults = create<ToolDefaults>((set) => ({
   fontFamily: 'Segoe UI',
   fontSize: 48,
   fontStyle: 'normal',
+  underline: false,
+  align: 'left',
   textColor: '#ff3b30',
   outline: null,
   shadow: null,

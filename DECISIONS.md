@@ -917,10 +917,14 @@ Nothing that is not in the document can be half-undone.
 
 Nothing else needs to see the object while it is being edited. §10 already
 requires the Konva node, the selection outline and the transform handles to be
-hidden — the editor is the only box on screen — and any control that could touch
-the object first has to take focus off the textarea, which commits. So the
-document is not missing anything during the edit; it simply does not have an
-object yet.
+hidden — the editor is the only box on screen. So the document is not missing
+anything during the edit; it simply does not have an object yet.
+
+**Superseded in part by D-045**: this originally added "and any control that
+could touch the object first has to take focus off the textarea, which commits".
+The options row now shows the pending text's own properties and edits it in
+place, without committing. The conclusion stands — a pending object is still not
+a document object — but that argument for it does not.
 
 `setEditingText` drops the pending slot whenever the id stops matching, so an
 uncommitted object cannot outlive its editor by any route — commit, `Esc`, or the
@@ -1013,3 +1017,64 @@ selection falls back to WebP through a single document-driven effect, because a
 layer can arrive or leave four different ways and only one of them is the
 dropdown. The correction is a `mutate`, not an `apply` — the app fixing itself
 is not an edit to undo.
+
+## D-045 — The options row follows the text being edited; underline and alignment
+
+**Decided:** 2026-09-16.
+
+**The row.** §9's three states are read from the tool and the selection, and
+placing a text switches to Select with nothing selected (§10, D-041) — so the
+options row emptied at the exact moment the user started typing, and the font,
+size and colour of the text being written were the one thing on screen that
+could not be changed. A text open in the in-place editor now takes precedence
+over all three states and shows its own properties.
+
+**Which is why D-041's last argument no longer holds.** It reasoned that nothing
+needs to see a pending object because "any control that could touch the object
+first has to take focus off the textarea, which commits". That was a statement
+about the blur handler, not about the object model, and it is what the bug was
+made of. Two changes retire it:
+
+- **Blur is not "click away".** Focus moving into the options row keeps the
+  editor open; it is the user restyling this text, not finishing it.
+- **The press that finishes a text is caught directly**, as a `pointerdown`
+  anywhere outside both the editor and the options row, in the capture phase.
+  Once focus has gone to a colour swatch the textarea will not blur again, so
+  blur alone would have left the editor open forever. Capture phase and
+  `pointerdown` so it runs before the canvas turns the same press into a
+  selection; `done` guards the pair from committing twice.
+- The toggle buttons (B, I, U, the three alignments) `preventDefault` on
+  mousedown and so never take focus at all, which is why pressing one does not
+  interrupt typing.
+
+**Where an edit lands.** A pending text is not in the document (D-041), so
+restyling it cannot be an undo entry — the whole insertion stays one `Add text`.
+An existing text being re-edited is an ordinary document object and gets one
+entry per control, like any other selection. The patch sink reads `pendingText`
+back out of the store rather than patching the copy its render closed over: two
+presses land inside one render often enough — underline, then centre — and the
+second carried the object as it was before the first, silently undoing it.
+
+**Underline and alignment.** `TextObject` gains `underline: boolean` and
+`align: 'left' | 'center' | 'right'`. Underline is kept out of `fontStyle`
+because both draw sites already separate them — Konva takes weight and slant as
+`fontStyle` and underline as `textDecoration`, and a DOM textarea does the same
+— so folding them together would only mean splitting them again twice. Alignment
+positions each wrapped line inside `boxWidth`; the box itself does not move, so
+none of §10's reflow geometry changes.
+
+Text objects written before this have neither field. They are filled in on
+project load, next to the missing-font fallback, rather than defaulted at each
+draw site, so everything downstream can rely on the type. No `schemaVersion`
+bump: an old file still loads, and a new one read by an old build would ignore
+two unknown keys.
+
+**One `TextControls`.** The Text tool's defaults, a text selection and the text
+being edited differ only in where a change lands, so they share one component
+and hand it a patch sink. Three copies of eight controls would have drifted the
+moment one of them grew a ninth.
+
+**The row is wider now**, and at the 1280 px minimum the last controls sit past
+the right edge. That is the one thing §9 allows to scroll, and it already did
+before these four buttons: everything to its left is fixed-width and still does
+not move.

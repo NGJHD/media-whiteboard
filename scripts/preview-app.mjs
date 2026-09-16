@@ -33,7 +33,8 @@ const expr = `
         id: 'demo-text', kind: 'text',
         x: 120, y: -250, width: 380, height: 60, rotation: 0, opacity: 1,
         text: 'Media Whiteboard', fontFamily: 'Segoe UI', fontSize: 54,
-        fontStyle: 'bold', color: '#1b1d21', outline: null, shadow: null,
+        fontStyle: 'bold', underline: false, align: 'left',
+        color: '#1b1d21', outline: null, shadow: null,
         boxWidth: 380,
       });
     });
