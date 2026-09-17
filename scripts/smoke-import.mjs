@@ -8,7 +8,14 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { ensureLargeClip, makeChecker, startHarness, workDir } from './smoke-lib.mjs';
+import {
+  ensureLargeClip,
+  ensureRotatedClip,
+  ensureRotatedStill,
+  makeChecker,
+  startHarness,
+  workDir,
+} from './smoke-lib.mjs';
 import { root } from './esbuild.config.mjs';
 
 const fixtures = path.join(root, 'test-fixtures');
@@ -371,6 +378,63 @@ console.log('=== deleting a layer cancels its decode (§7) ===');
   }
 
   fs.rmSync(slow, { force: true });
+}
+
+/* -- 8. A rotated source is placed at its displayed size, not its stored one  */
+
+console.log('');
+console.log('=== display rotation (§7) ===');
+{
+  // Both sources are 320x240 as stored and 240x320 as drawn: ffmpeg auto-rotates
+  // on decode and Chromium applies EXIF in createImageBitmap, so the frames are
+  // upright either way. Only ffprobe's stream dimensions are of the raster, and
+  // if those reach the model the node is sized landscape and the upright frame
+  // is squashed into it.
+  //
+  // The two carry the rotation in different places — a display matrix on the
+  // stream for the clip, EXIF frame side data for the still — so neither covers
+  // the other.
+  const clip = ensureRotatedClip();
+  const still = ensureRotatedStill();
+
+  const result = await harness.run(`
+    (async () => {
+      const store = window.__mwStore;
+      const { importFiles } = await import('/media/importMedia.ts');
+
+      await importFiles([${JSON.stringify(clip)}], { x: 0, y: 0 });
+      await window.__mwIdle();
+      await importFiles([${JSON.stringify(still)}], { x: 0, y: 0 });
+      await window.__mwIdle();
+
+      const [video, image] = store.getState().doc.objects;
+      const size = (o) => o && [o.nativeWidth, o.nativeHeight];
+      const drawn = (o) => o && [Math.round(o.width), Math.round(o.height)];
+      return {
+        ok: true,
+        objects: store.getState().doc.objects.length,
+        videoNative: size(video),
+        videoDrawn: drawn(video),
+        imageNative: size(image),
+        imageDrawn: drawn(image),
+        toasts: store.getState().toasts.map((t) => t.message),
+      };
+    })()
+  `);
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.check('both layers were added', result.objects, 2);
+    c.check('no toast', result.toasts, []);
+    c.check('rotated clip: native size is the displayed one', result.videoNative, [240, 320]);
+    c.check('rotated still: native size is the displayed one', result.imageNative, [240, 320]);
+    // 240x320 fits inside half of the default 1280x720 canvas (640x360), so §7
+    // leaves both at native size — and the aspect is the thing under test.
+    c.check('rotated clip: placed undistorted', result.videoDrawn, [240, 320]);
+    c.check('rotated still: placed undistorted', result.imageDrawn, [240, 320]);
+  }
 }
 
 await harness.stop();

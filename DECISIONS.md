@@ -1078,3 +1078,41 @@ moment one of them grew a ninth.
 the right edge. That is the one thing §9 allows to scroll, and it already did
 before these four buttons: everything to its left is fixed-width and still does
 not move.
+
+## D-046 — Probe reports the displayed dimensions, not the stored raster
+
+A portrait phone photo or clip dropped in came out squashed into a landscape
+box. Both halves of an import already honour rotation: Chromium applies EXIF
+orientation in `createImageBitmap`, and ffmpeg auto-rotates on decode, so the
+frames arrive upright either way. What was not rotated was ffprobe's
+`stream.width`/`height`, which describe the raster **as stored**. Those became
+`nativeWidth`/`nativeHeight`, and §3's node is sized from the model, so Konva
+stretched an upright 3000x4000 frame across a 4000x3000 node.
+
+It never looked rotated, which is why it read as an image-only bug — the pixels
+are upright in both cases and only the aspect is wrong, so a video fails exactly
+the same way and gives no separate symptom to notice.
+
+`probe()` now swaps width and height when the display rotation is a quarter
+turn. The rotation lives in one of two places depending on the container:
+
+- **Video**: a display matrix on the stream, already in `-show_streams` output.
+  The field simply was not read.
+- **Still**: EXIF, which ffprobe reports as **frame** side data and never on the
+  stream. §7's "probe cost is part of the drop" rule cannot skip frames here, so
+  the static branch asks for `-show_entries frame_side_data=rotation` with
+  `-read_intervals %+#1` and no `-show_frames`. That enables the subsection
+  alone on one packet — one field on one frame, rather than the whole EXIF tag
+  block, which for a Samsung JPEG is some fifty entries.
+
+180° is left alone: it does not swap the axes, and the decoders have already
+applied it to the pixels.
+
+`MEDIA_META_VERSION` goes to 7 so entries written with the stored dimensions are
+re-probed rather than serving them.
+
+**Not migrated: projects saved before this.** §13 stores `nativeWidth`/`height`
+in the `Doc` and load never re-probes, so a `.mwproj` written with a rotated
+layer keeps the squashed geometry. Re-probing on load would mean a drop's worth
+of ffprobe per media layer on every open, to correct a file the user can fix by
+re-dropping the source.

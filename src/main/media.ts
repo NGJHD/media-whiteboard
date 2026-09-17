@@ -91,6 +91,11 @@ async function cacheKeyFor(sourcePath: string): Promise<string> {
     .slice(0, 16);
 }
 
+/** A display matrix prints as one entry of a `side_data_list` alongside others. */
+interface ProbeSideData {
+  rotation?: number;
+}
+
 interface ProbeStream {
   width?: number;
   height?: number;
@@ -100,11 +105,13 @@ interface ProbeStream {
   codec_name?: string;
   nb_frames?: string;
   tags?: Record<string, string>;
+  side_data_list?: ProbeSideData[];
 }
 
 interface ProbeFrame {
   best_effort_timestamp_time?: string;
   duration_time?: string;
+  side_data_list?: ProbeSideData[];
 }
 
 /**
@@ -160,6 +167,31 @@ function durationsFromFrames(frames: ProbeFrame[], totalSeconds: number): number
   return out;
 }
 
+/**
+ * True when the source's display rotation is a quarter turn, so its stored
+ * raster is the transpose of what gets drawn.
+ *
+ * Both halves of an import already honour rotation — Chromium applies EXIF in
+ * `createImageBitmap`, and ffmpeg auto-rotates on decode — so the frames are
+ * upright either way. What is not rotated is `stream.width`/`height`, which
+ * describe the raster as stored. Left uncorrected those become `nativeWidth`/
+ * `nativeHeight`, and §3's node is sized from the model, so a portrait phone
+ * photo or clip gets squashed into a landscape box.
+ *
+ * It lives in two places depending on the container: a video carries a display
+ * matrix as *stream* side data, while a JPEG's EXIF orientation is *frame* side
+ * data, which is why §7's "probe cost is part of the drop" rule cannot simply
+ * skip frames for stills.
+ */
+function isQuarterTurn(sides: ProbeSideData[] | undefined): boolean {
+  for (const side of sides ?? []) {
+    if (typeof side.rotation !== 'number') continue;
+    // -90, 90 and 270 all mean the axes swap; 180 and 0 leave them alone.
+    if (Math.abs(Math.round(side.rotation)) % 180 === 90) return true;
+  }
+  return false;
+}
+
 /** "23.976", "30000/1001" and "0/0" all appear here. Only the last is useless. */
 function parseRational(value: string | undefined): number {
   if (!value) return 0;
@@ -201,6 +233,11 @@ export async function probe(sourcePath: string): Promise<ProbeInfo> {
     ...(isStatic || !perFrameTiming
       ? []
       : ['-show_frames', '-show_entries', 'frame=best_effort_timestamp_time,duration_time']),
+    // A still's orientation is EXIF, which ffprobe reports as frame side data
+    // and never on the stream. Asking for the subsection alone — without
+    // `-show_frames`, and capped at the first packet — keeps this to one field
+    // on one frame rather than the whole EXIF block on every frame.
+    ...(isStatic ? ['-show_entries', 'frame_side_data=rotation', '-read_intervals', '%+#1'] : []),
     '-of', 'json',
     sourcePath,
   ];
@@ -219,6 +256,13 @@ export async function probe(sourcePath: string): Promise<ProbeInfo> {
     throw new Error('No video stream found — the file may be corrupt or unsupported.');
   }
 
+  // The dimensions every caller wants are the ones the frames will actually be
+  // decoded at, not the stored raster.
+  const rotated =
+    isQuarterTurn(stream.side_data_list) || isQuarterTurn(parsed.frames?.[0]?.side_data_list);
+  const width = rotated ? stream.height : stream.width;
+  const height = rotated ? stream.width : stream.height;
+
   // Matroska carries no per-stream duration, so a stream-only read returns 0 and
   // every duration check downstream is wrong. Try every place it can live.
   const durationSeconds =
@@ -230,8 +274,8 @@ export async function probe(sourcePath: string): Promise<ProbeInfo> {
 
   if (isStatic) {
     return {
-      width: stream.width,
-      height: stream.height,
+      width,
+      height,
       durationSeconds: 0,
       frameDurationsMs: [0],
       frameCount: 1,
@@ -249,8 +293,8 @@ export async function probe(sourcePath: string): Promise<ProbeInfo> {
 
     const totalMs = durations.reduce((a, b) => a + b, 0);
     return {
-      width: stream.width,
-      height: stream.height,
+      width,
+      height,
       durationSeconds: durationSeconds || totalMs / 1000,
       frameDurationsMs: durations,
       frameCount: durations.length,
@@ -277,8 +321,8 @@ export async function probe(sourcePath: string): Promise<ProbeInfo> {
   const perFrameMs = Math.round((1000 / fps) * 1000) / 1000;
 
   return {
-    width: stream.width,
-    height: stream.height,
+    width,
+    height,
     durationSeconds: durationSeconds || (frameCount * perFrameMs) / 1000,
     frameDurationsMs: new Array<number>(frameCount).fill(perFrameMs),
     frameCount,

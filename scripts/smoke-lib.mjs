@@ -158,3 +158,62 @@ export function ensureProxyClip() {
   ]);
   return file;
 }
+
+/**
+ * A landscape clip carrying a quarter-turn display matrix, as every phone
+ * writes. ffmpeg auto-rotates on decode, so its frames come out 240x320 while
+ * ffprobe still reports the stored 320x240 — the mismatch §7's probe has to
+ * resolve before the dimensions reach `nativeWidth`/`nativeHeight`.
+ *
+ * Written in two steps because `-display_rotation` is an *input* option: the
+ * first encodes the pixels, the second remuxes them under the matrix.
+ */
+export function ensureRotatedClip() {
+  const file = path.join(workDir, 'rotated-clip.mp4');
+  if (fs.existsSync(file)) return file;
+  const ffmpeg = path.join(root, 'resources', 'bin', 'ffmpeg.exe');
+  const plain = path.join(workDir, 'rotated-clip.unrotated.mp4');
+  execFileSync(ffmpeg, [
+    '-y', '-v', 'error',
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=10:duration=1',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+    plain,
+  ]);
+  execFileSync(ffmpeg, ['-y', '-v', 'error', '-display_rotation', '90', '-i', plain, '-c', 'copy', file]);
+  return file;
+}
+
+/**
+ * The same case for a still, where the rotation is EXIF rather than a display
+ * matrix — a different ffprobe section (frame side data, not stream) and a
+ * different consumer, since a static source is copied into the cache and
+ * oriented by Chromium's own decoder rather than by ffmpeg.
+ *
+ * ffmpeg cannot write EXIF, so the APP1 segment is assembled by hand and spliced
+ * in after the SOI marker: a big-endian TIFF header with one IFD0 entry,
+ * Orientation (0x0112) = 6, "rotate 90 CW".
+ */
+export function ensureRotatedStill() {
+  const file = path.join(workDir, 'rotated-still.jpg');
+  if (fs.existsSync(file)) return file;
+  const plain = path.join(workDir, 'rotated-still.unrotated.jpg');
+  execFileSync(path.join(root, 'resources', 'bin', 'ffmpeg.exe'), [
+    '-y', '-v', 'error',
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x240',
+    '-frames:v', '1',
+    plain,
+  ]);
+
+  const app1 = Buffer.concat([
+    Buffer.from([0xff, 0xe1, 0x00, 0x22]),                          // APP1, length 34
+    Buffer.from('Exif\0\0', 'latin1'),
+    Buffer.from([0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08]),  // "MM", 42, IFD0 at byte 8
+    Buffer.from([0x00, 0x01]),                                      // one entry
+    Buffer.from([0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00]),
+    Buffer.from([0x00, 0x00, 0x00, 0x00]),                          // no IFD1
+  ]);
+
+  const jpeg = fs.readFileSync(plain);
+  fs.writeFileSync(file, Buffer.concat([jpeg.subarray(0, 2), app1, jpeg.subarray(2)]));
+  return file;
+}

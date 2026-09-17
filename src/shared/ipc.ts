@@ -37,7 +37,7 @@ export interface FfmpegInfo {
  * written by an older build are re-decoded instead of silently serving stale
  * metadata. The cache key covers the *source file*, not the decoder.
  */
-export const MEDIA_META_VERSION = 6;
+export const MEDIA_META_VERSION = 7;
 
 /** Written as meta.json beside the decoded frames. */
 export interface MediaMeta {
