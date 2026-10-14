@@ -191,6 +191,12 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
       proxies.delete(id);
     }
 
+    // Konva hit-tests the proxies, not the document, so their stacking has to
+    // follow `objects` order (§5). Left in creation order, a z-order change
+    // leaves a sent-to-back object's proxy on top, and a drag on anything in
+    // front of it grabs the object behind instead.
+    for (const obj of doc.objects) proxies.get(obj.id)?.moveToTop();
+
     groupBox.moveToTop();
     transformer.moveToTop();
     updateTransformer(doc, selection);
