@@ -24,6 +24,8 @@ const preamble = `
     id, kind: 'shape', shape: 'rect', x, y, width: w, height: h,
     rotation: 0, opacity: 1, stroke: '#ff3b30', strokeWidth: 2, fill: null,
   });
+  // Ellipses keep the aspect lock; rectangles resize freely.
+  const ellipse = (id, x, y, w, h) => ({ ...shape(id, x, y, w, h), shape: 'ellipse' });
 
   // Konva binds its pointer handling to the stage content div.
   const content = () => document.querySelector('.viewport .konvajs-content') ?? document.querySelector('.viewport > div');
@@ -360,7 +362,7 @@ console.log('=== corner-only resize handles (§10) ===');
       s().apply('setup', (d) => {
         d.canvasRect = { x: -400, y: -300, width: 800, height: 600 };
         d.objects = [
-          shape('a', 0, 0, 200, 100),
+          ellipse('a', 0, 0, 200, 100),
           { id: 't', kind: 'text', x: 250, y: 200, width: 200, height: 40,
             rotation: 0, opacity: 1, text: 'hi', fontFamily: 'Segoe UI',
             fontSize: 30, fontStyle: 'normal', underline: false, align: 'left', color: '#fff',
@@ -400,11 +402,30 @@ console.log('=== corner-only resize handles (§10) ===');
       await frame();
 
       const a = s().doc.objects.find((o) => o.id === 'a');
+
+      // The same lopsided drag on a rectangle, which has no ratio to hold.
+      s().apply('swap in a rectangle', (d) => {
+        d.objects = [shape('r', 0, 0, 200, 100)];
+      });
+      s().setSelection(['r']);
+      await frame();
+      await frame();
+      send('mousedown', corner.x, corner.y);
+      await frame();
+      for (let i = 1; i <= 5; i += 1) {
+        send('mousemove', corner.x + 20 * i * scale, corner.y + 4 * i * scale);
+        await frame();
+      }
+      send('mouseup', corner.x + 100 * scale, corner.y + 20 * scale);
+      await frame();
+      const r = s().doc.objects.find((o) => o.id === 'r');
+
       return {
         ok: true,
         single, text, group,
         grew: a.width > 210,
         ratio: Math.round((a.width / a.height) * 1000) / 1000,
+        rectRatio: Math.round((r.width / r.height) * 1000) / 1000,
       };
     })()
   `);
@@ -422,6 +443,11 @@ console.log('=== corner-only resize handles (§10) ===');
     c.truthy('the drag actually resized', result.grew);
     // Dragged 100 across and only 20 down; the ratio is what decides the rest.
     c.check('the 2:1 ratio survived a lopsided drag', result.ratio, 2);
+    c.truthy(
+      'a rectangle follows the drag instead',
+      result.rectRatio !== 2,
+      `ratio ${result.rectRatio}`,
+    );
   }
 }
 
@@ -436,7 +462,7 @@ console.log('=== resize snapping (§11) ===');
       s().apply('setup', (d) => {
         d.canvasRect = { x: -400, y: -300, width: 800, height: 600 };
         // 'b' sits with its left edge at x = 150; 'a' is grown towards it.
-        d.objects = [shape('a', 0, 0, 100, 100), shape('b', 200, 0, 100, 100)];
+        d.objects = [ellipse('a', 0, 0, 100, 100), shape('b', 200, 0, 100, 100)];
       });
       s().setTool('select');
       s().setSelection(['a']);
@@ -629,6 +655,7 @@ console.log('=== Shift, aspect ratio and rotation (§10) ===');
         d.objects = [
           media('m', 0, 0, 200, 100),
           shape('r', 0, 0, 200, 100),
+          ellipse('e', 0, 0, 200, 100),
           media('m2', 0, 0, 200, 100),
           shape('r2', 250, 200, 60, 60),
         ];
@@ -636,13 +663,14 @@ console.log('=== Shift, aspect ratio and rotation (§10) ===');
       s().setTool('select');
 
       const mediaResize = await shiftResize(['m']);
-      const shapeResize = await shiftResize(['r']);
+      const shapeResize = await shiftResize(['e']);
+      const rectResize = await shiftResize(['r']);
       const groupResize = await shiftResize(['m2', 'r2']);
 
       const snapped = await rotate('m', true);
       const free = await rotate('m', false);
 
-      return { ok: true, mediaResize, shapeResize, groupResize, snapped, free };
+      return { ok: true, mediaResize, shapeResize, rectResize, groupResize, snapped, free };
     })()
   `);
 
@@ -655,10 +683,12 @@ console.log('=== Shift, aspect ratio and rotation (§10) ===');
     c.check('Shift does not distort media', result.mediaResize.ratio, 2);
     // Shapes keep the §10 escape hatch: they have no source to be wrong about.
     c.truthy(
-      'Shift still distorts a shape',
+      'Shift still distorts an ellipse',
       result.shapeResize.ratio !== 2,
       `ratio ${result.shapeResize.ratio}`,
     );
+    // A rectangle is free by default, so Shift is what locks it.
+    c.check('Shift locks a rectangle', result.rectResize.ratio, 2);
     // §10 said this already; the shared transformer had been ignoring it.
     c.check('Shift does not distort a group', result.groupResize.ratio, 2);
 
@@ -669,6 +699,104 @@ console.log('=== Shift, aspect ratio and rotation (§10) ===');
       result.free !== 0 && result.free % 15 !== 0,
       `${result.free} degrees`,
     );
+  }
+}
+
+/* -- 10. Text resizes from its top edge, from any corner (§10) ------------- */
+
+console.log('');
+console.log('=== text resize keeps its top edge (§10) ===');
+{
+  // Through the real flow — place, type, commit — because a seeded object
+  // skips the editor's commit, which is where the stored height came from, and
+  // that height is what put the bottom handles just outside the object.
+  const result = await harness.run(`
+    (async () => {
+      ${preamble}
+      const { measureTextHeight } = await import('/scene/buildScene.ts');
+      const stage = window.__mwStage;
+      const r2 = (n) => Math.round(n * 100) / 100;
+
+      s().apply('setup', (d) => {
+        d.canvasRect = { x: -400, y: -300, width: 800, height: 600 };
+        d.objects = [];
+      });
+      s().setTool('text');
+      await frame();
+      const at = toScreen(-150, -100);
+      send('mousedown', at.x, at.y);
+      await frame();
+      send('mouseup', at.x, at.y);
+      await new Promise((r) => setTimeout(r, 300));
+
+      const editor = document.querySelector('textarea.text-editor');
+      if (!editor) return { ok: false, error: 'no text editor on screen' };
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')
+        .set.call(editor, 'one two three four five six');
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+      await frame();
+      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+      await frame();
+      await frame();
+
+      const text = () => s().doc.objects.find((o) => o.kind === 'text');
+      const committed = text();
+      const top = r2(committed.y - committed.height / 2);
+      const drawnTop = () => {
+        const v = s().view;
+        const node = stage.getLayers()[0].findOne('Text');
+        return r2((node.getClientRect().y - v.offsetY) / v.scale);
+      };
+
+      const drags = [];
+      // Each corner, pressed exactly on the handle's centre — half of which
+      // lies outside the object.
+      for (const [name, dx, dy] of [['bottom-right', -80, 40], ['bottom-left', 40, 40], ['top-left', -60, -30]]) {
+        const before = text().boxWidth;
+        const a = stage.findOne('Transformer').findOne('.' + name).getAbsolutePosition();
+        send('mousedown', a.x, a.y);
+        await frame();
+        for (let i = 1; i <= 5; i += 1) {
+          send('mousemove', a.x + (dx * i) / 5, a.y + (dy * i) / 5);
+          await frame();
+        }
+        send('mouseup', a.x + dx, a.y + dy);
+        await frame();
+        await frame();
+        const t = text();
+        drags.push({
+          name,
+          resized: Math.abs(t.boxWidth - before) > 10,
+          selected: s().selection.length === 1 && s().selection[0] === t.id,
+          top: r2(t.y - t.height / 2),
+          drawnTop: drawnTop(),
+          height: r2(t.height),
+          measured: r2(measureTextHeight(t)),
+        });
+      }
+
+      return {
+        ok: true,
+        committedHeight: r2(committed.height),
+        committedMeasured: r2(measureTextHeight(committed)),
+        top,
+        drags,
+      };
+    })()
+  `);
+
+  if (!result.ok) {
+    c.fail(`run failed: ${result.error}`);
+    for (const line of result.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.check('a committed text stores the height it draws at', result.committedHeight, result.committedMeasured);
+    for (const d of result.drags) {
+      c.truthy(`${d.name}: the drag resized the text`, d.resized);
+      c.truthy(`${d.name}: and it is still selected`, d.selected);
+      c.check(`${d.name}: the top edge did not move`, d.top, result.top);
+      c.check(`${d.name}: nor did the drawn text`, d.drawnTop, result.top);
+      c.check(`${d.name}: height is the wrapped height`, d.height, d.measured);
+    }
   }
 }
 

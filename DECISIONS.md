@@ -1116,3 +1116,53 @@ in the `Doc` and load never re-probes, so a `.mwproj` written with a rotated
 layer keeps the squashed geometry. Re-probing on load would mean a drop's worth
 of ffprobe per media layer on every open, to correct a file the user can fix by
 re-dropping the source.
+
+## D-047 — Free rectangles, text backgrounds, shape opacity
+
+Three requested changes to the spec, recorded in CLAUDE.md §5, §9 and §10.
+
+**Rectangles resize freely.** A rectangle has no intrinsic ratio, and locking
+the first drag's ratio made every later resize a scaled copy of it. `Shift`
+keeps its meaning of *toggling* the lock, so for a rectangle it now locks. The
+ellipse is unchanged (locked, `Shift` frees) because only the rectangle was
+asked for; a group is still uniform-only.
+
+**Text background** is a nullable `background` colour on `TextObject`. It
+covers exactly the text box, adding nothing to the bounds, so Trim to fit and
+snapping are unchanged. `buildText` returns a `Konva.Group` of rect + text only
+when there is a background, and the group carries rotation and opacity so they
+apply once to the pair. Projects saved before this load with `background: null`
+(filled in alongside underline and alignment), so no schema bump.
+
+**Shape opacity** has a UI after all. The field was already in the model and
+rendered; only a control was missing. It is a 0-100 % slider, and each drag is
+one undo entry via `applyMerged` under a per-drag label — the counter is
+module-level so a remount on selection change cannot reuse a label and merge
+into an unrelated entry. Media and text still have no opacity control.
+
+## D-048 — Text keeps its top edge on every reflow
+
+A single-text resize only changed `boxWidth`. The height was measured nowhere
+but the in-place editor's commit, and the Transformer moved the centre by the
+whole pointer delta, so a corner drag slid the text vertically and left the
+stored height stale — which D-047's background made visible as a box that no
+longer fit its text. Font, size and style edits had the same stale height.
+
+`measureTextHeight` builds a `Konva.Text` from the same attributes `buildText`
+draws with (`textAttrs`), so there is one definition of how a text wraps.
+The resize fixes the box in `boundBoxFunc` — top-left slides only along the
+top edge, height is the measured one — so the handles and the model agree, as
+§11 already requires for snapping. Option-row edits call `refitTextHeight`,
+which moves the centre along the text's own down axis so a rotated text keeps
+its top edge as well.
+
+**Follow-up: a press on a transform handle is not a canvas click.** The stage
+mousedown handler hit-tests the model, and a handle sits on the box edge with
+half of it outside the object, so pressing that half deselected mid-gesture.
+For text it was nearly certain on the bottom handles: the editor committed the
+textarea's `scrollHeight` (117.5 in the reproduction) while Konva drew 115.2,
+putting those handles just past the object. The handler now ignores targets
+inside the Transformer, the commit stores `measureTextHeight`, and the top-edge
+constraint finds its text through the Transformer's node rather than the
+selection, so nothing that touches the selection can switch it off mid-drag.
+

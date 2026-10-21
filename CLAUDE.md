@@ -193,6 +193,7 @@ interface TextObject extends BaseObject {
   color: string;
   outline: { color: string; width: number } | null;
   shadow: { color: string; blur: number; offsetX: number; offsetY: number } | null;
+  background: string | null;        // fills the whole text box; null == none
   boxWidth: number;                 // text reflows within this; height auto-computed
 }
 ```
@@ -495,8 +496,8 @@ Per-kind properties, matching the fields in §5:
 | Selection | Controls |
 |---|---|
 | Media | source size (read-only), width, height |
-| Shape | stroke color, stroke width, fill color, No fill |
-| Text | font family, size, bold, italic, underline, alignment, color, outline, shadow |
+| Shape | stroke color, stroke width, fill color, No fill, opacity |
+| Text | font family, size, bold, italic, underline, alignment, color, outline, shadow, background color, No background |
 | Mixed kinds | *(none — the section is empty)* |
 
 Media's width and height are **locked to the source aspect ratio**: typing one
@@ -505,8 +506,10 @@ being able to type them, and it matches the corner-only handles — there is
 deliberately no way to distort media by accident. They are per-object, so a
 multi-selection of media shows nothing.
 
-`opacity` stays in the model (§5) and is honoured by `buildScene`, but **it has no
-UI**. There is no opacity control anywhere.
+`opacity` is in the model (§5) and honoured by `buildScene`. **Only shapes expose
+it**, as a percentage slider in the Rect/Ellipse tool options and in a shape
+selection's properties; one slider drag is one undo entry. Media and text have
+no opacity control.
 
 With a multi-selection of one kind, show the shared controls. A control whose value
 differs across the selection renders blank/indeterminate; setting it applies that
@@ -541,10 +544,11 @@ output (§3).
 - **Corner handles only — never edge handles.** An edge handle can only change
   one dimension, so its entire purpose is to distort, and for media that is
   against the source's own aspect ratio. Four corners plus the rotation handle.
-- **Resize is aspect-locked.** `Shift` frees it **for shapes only**. A media
-  layer has a source aspect ratio that stretching is always wrong against, so no
-  gesture distorts one — not an edge handle, not `Shift`. A group cannot be
-  distorted either, for the reason in "Group resize" below.
+- **Resize is aspect-locked, except for rectangles.** A rectangle resizes
+  freely and `Shift` locks its ratio; an ellipse is locked and `Shift` frees it.
+  A media layer has a source aspect ratio that stretching is always wrong
+  against, so no gesture distorts one — not an edge handle, not `Shift`. A group
+  cannot be distorted either, for the reason in "Group resize" below.
 - `Shift` is about the **resize** only. It still snaps rotation to 15° for
   everything, including media; that is a separate mechanism.
 - **Rotation snaps to 15°** while `Shift` is held.
@@ -607,13 +611,22 @@ join. Interpolate between pointer events so fast strokes don't gap.
   centre, so writing a taller height without moving it would jump the finished
   text upward the moment the editor closed.
 - Options: system font family, size, style (bold/italic/underline), alignment
-  (left/center/right), color, optional outline, optional shadow.
+  (left/center/right), color, optional outline, optional shadow, optional
+  background color. The background fills exactly `boxWidth` × the wrapped
+  height, so it never changes the object's bounds; it is grouped with the text
+  in `buildScene` so rotation and opacity apply to the pair.
 - **Alignment positions each wrapped line inside `boxWidth`.** The box itself
   does not move, so none of the reflow geometry below changes with it.
 - **Resize reflows**: dragging a corner changes `boxWidth` and the text re-wraps;
   height is always auto-computed from the wrapped result, so only the horizontal
   component of the drag is used. Glyph size is changed only via the font-size
   control, never by dragging.
+- **Text is top-aligned: its top edge never moves on a reflow.** Not on a
+  corner drag (the drag's vertical component is discarded, so the box and its
+  handles stay on the top edge too), and not when a font, size or style change
+  alters the wrapped height. Height is re-measured from the same Konva text
+  attributes `buildScene` draws with, so the selection box and the background
+  always match the text.
 - Enumerate system fonts via `queryLocalFonts()` where available, else a `document.fonts`
   probe list. On project load, if a referenced font is missing, warn and fall back to
   the default font.
@@ -621,7 +634,8 @@ join. Interpolate between pointer events so fast strokes don't gap.
 ### Rect / Ellipse
 
 - Drag to draw. **Hold `Shift` to constrain** to a square / perfect circle.
-- Options: stroke color, stroke width, fill color, and a "No fill" toggle.
+- Options: stroke color, stroke width, fill color, a "No fill" toggle, and
+  opacity.
 - Shapes are `SceneObject`s — selectable, movable, deletable, editable after creation.
 
 ---

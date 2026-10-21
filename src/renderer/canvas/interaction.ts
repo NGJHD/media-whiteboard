@@ -2,6 +2,7 @@ import Konva from 'konva';
 import type { Doc, LayerId, Rect, SceneObject } from '../../shared/doc';
 import { WORLD_MAX, WORLD_MIN, objectBounds } from '../../shared/doc';
 import { clampObjectToWorld } from '../actions/objectActions';
+import { measureTextHeight } from '../scene/buildScene';
 import { useStore, type ViewTransform } from '../state/store';
 import type { SnapGuide } from './overlay';
 import { selectionBounds, snapPoint, snapRect } from './snapping';
@@ -230,15 +231,19 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
       transformer.enabledAnchors(CORNER_ANCHORS);
       // §10: text resize changes boxWidth and reflows, so a corner drag applies
       // only its horizontal component and locking the ratio would be a lie.
-      transformer.keepRatio(obj.kind !== 'text');
-      // §10: Shift frees the aspect ratio for shapes, and only for shapes. A
-      // media layer has a source ratio that stretching is always wrong against,
-      // so there is deliberately no gesture that distorts one.
+      // A rectangle resizes freely: it has no intrinsic ratio to protect, and
+      // locking one made every rectangle a scaled copy of the first drag.
+      const freeform = obj.kind === 'shape' && obj.shape === 'rect';
+      transformer.keepRatio(obj.kind !== 'text' && !freeform);
+      // §10: Shift toggles the aspect lock for shapes, and only for shapes — it
+      // locks a rectangle and frees an ellipse. A media layer has a source ratio
+      // that stretching is always wrong against, so there is deliberately no
+      // gesture that distorts one.
       //
       // This is only about the *resize*. Shift still snaps rotation to 15°
       // everywhere — that runs through `rotationSnaps`, which Konva applies in
       // a different branch entirely.
-      transformer.shiftBehavior(obj.kind === 'shape' ? 'inverted' : 'none');
+      transformer.shiftBehavior(freeform ? 'default' : obj.kind === 'shape' ? 'inverted' : 'none');
       transformer.nodes([node]);
       return;
     }
@@ -380,6 +385,9 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
           // the height follows from the wrapped result. Glyphs never scale here.
           obj.boxWidth = Math.max(16, start.kind === 'text' ? start.boxWidth * scaleX : obj.boxWidth);
           obj.width = obj.boxWidth;
+          // The box was already held to the wrapped height and the top edge in
+          // `fitTextBox`, so the centre read off the node above is right for it.
+          obj.height = measureTextHeight(obj);
         } else {
           obj.width = Math.max(1, start.width * scaleX);
           obj.height = Math.max(1, start.height * scaleY);
@@ -611,10 +619,43 @@ export function createInteraction(stage: Konva.Stage): InteractionHandle {
     };
   }
 
+  /**
+   * §10: a text resize changes only `boxWidth`, and its top edge stays put.
+   *
+   * The Transformer moves the box with the whole pointer, so the vertical part
+   * of a corner drag would otherwise slide the text up or down and stretch the
+   * box to a height the wrapped text does not have. This keeps the box's
+   * top-left on the original top edge — sliding along it only, so a left-corner
+   * drag still pins the right edge — and makes the height the wrapped result's.
+   * Konva's box rotation is in radians.
+   */
+  function fitTextBox(oldBox: Box, box: Box): Box {
+    // The node under the Transformer, not the selection: this has to hold for
+    // the whole gesture, whatever else changes the selection meanwhile.
+    const nodes = transformer.nodes();
+    if (nodes.length !== 1) return box;
+    const id = nodes[0]!.getAttr('layerId') as LayerId | undefined;
+    const obj = id ? useStore.getState().doc.objects.find((o) => o.id === id) : undefined;
+    if (obj?.kind !== 'text') return box;
+
+    const v = view();
+    const ux = Math.cos(box.rotation);
+    const uy = Math.sin(box.rotation);
+    const along = (box.x - oldBox.x) * ux + (box.y - oldBox.y) * uy;
+    const height = measureTextHeight(obj, Math.max(16, box.width / v.scale)) * v.scale;
+    return {
+      x: oldBox.x + ux * along,
+      y: oldBox.y + uy * along,
+      width: box.width,
+      height,
+      rotation: box.rotation,
+    };
+  }
+
   // §4: dragging or resizing stops at the world boundary rather than crossing it.
   transformer.boundBoxFunc((oldBox, newBox) => {
     const v = view();
-    const box = snapResize(newBox);
+    const box = fitTextBox(oldBox, snapResize(newBox));
 
     const worldLeft = (box.x - v.offsetX) / v.scale;
     const worldTop = (box.y - v.offsetY) / v.scale;

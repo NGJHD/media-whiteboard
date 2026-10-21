@@ -634,6 +634,70 @@ console.log('=== underline and alignment in the output (§3) ===');
   }
 }
 
+/* -- Text background and shape opacity reach the output -------------------- */
+
+console.log('');
+console.log('=== text background and shape opacity in the output (§3) ===');
+{
+  const files = {
+    backed: path.join(workDir, 'text-background.webp'),
+    faded: path.join(workDir, 'shape-opacity.webp'),
+  };
+  for (const f of Object.values(files)) fs.rmSync(f, { force: true });
+
+  const r = await harness.run(`
+    (async () => {
+      const { exportDocument } = await import('/export/exportScene.ts');
+      const store = window.__mwStore;
+      const s = () => store.getState();
+      const files = ${JSON.stringify(files)};
+
+      const write = async (out, objects) => {
+        s().apply('setup', (d) => {
+          d.canvasRect = { x: -160, y: -90, width: 320, height: 180 };
+          d.background = { transparent: false, color: '#ffffff' };
+          d.outputPath = out;
+          d.format = 'webp';
+          d.objects = objects;
+        });
+        const res = await exportDocument({ doc: s().doc });
+        if (!res.ok) throw new Error(res.error);
+      };
+
+      // Box spans x -150..150, y -24..24 in world: 10..310, 66..114 in output.
+      await write(files.backed, [{
+        id: 't', kind: 'text', x: 0, y: 0, width: 300, height: 48,
+        rotation: 0, opacity: 1, text: 'M', fontFamily: 'Segoe UI',
+        fontSize: 40, fontStyle: 'normal', underline: false, align: 'left',
+        color: '#ff0000', outline: null, shadow: null, background: '#0000ff',
+        boxWidth: 300,
+      }]);
+      await write(files.faded, [{
+        id: 'r', kind: 'shape', shape: 'rect', x: 0, y: 0, width: 200, height: 100,
+        rotation: 0, opacity: 0.5, stroke: '#000000', strokeWidth: 0, fill: '#000000',
+      }]);
+      return { ok: true };
+    })()
+  `);
+
+  if (!r.ok) {
+    c.fail(`background/opacity pixels: ${r.error}`);
+    for (const line of r.log ?? []) console.error(`    ${line}`);
+  } else {
+    const backed = pixels(files.backed, 320, 180);
+    // Far right of the box: no glyphs there, only the background.
+    const [br, bg, bb] = backed(290, 90);
+    c.truthy('the text box is filled with its background', bb > 200 && br < 60 && bg < 60,
+      `rgb(${br}, ${bg}, ${bb})`);
+    const [or, , ob] = backed(160, 30);
+    c.truthy('and nothing outside the box', or > 200 && ob > 200, `rgb(${or}, …, ${ob})`);
+
+    const [fr] = pixels(files.faded, 320, 180)(160, 90);
+    // Black at half opacity over white lands near mid-grey.
+    c.truthy('a half-opacity shape blends with what is under it', fr > 100 && fr < 155, `red ${fr}`);
+  }
+}
+
 await harness.stop();
 console.log('');
 console.log(c.failures === 0 ? 'All tool smoke tests passed.' : `${c.failures} failed.`);

@@ -16,6 +16,7 @@ export interface ToolDefaults {
   stroke: string;
   strokeWidth: number;
   fill: string | null;
+  shapeOpacity: number;
 
   fontFamily: string;
   fontSize: number;
@@ -25,6 +26,7 @@ export interface ToolDefaults {
   textColor: string;
   outline: { color: string; width: number } | null;
   shadow: { color: string; blur: number; offsetX: number; offsetY: number } | null;
+  textBackground: string | null;
 
   set(patch: Partial<Omit<ToolDefaults, 'set'>>): void;
 }
@@ -37,6 +39,7 @@ export const useToolDefaults = create<ToolDefaults>((set) => ({
   stroke: '#ff3b30',
   strokeWidth: 3,
   fill: null,
+  shapeOpacity: 1,
 
   fontFamily: 'Segoe UI',
   fontSize: 48,
@@ -46,6 +49,7 @@ export const useToolDefaults = create<ToolDefaults>((set) => ({
   textColor: '#ff3b30',
   outline: null,
   shadow: null,
+  textBackground: null,
 
   set(patch) {
     set(patch);

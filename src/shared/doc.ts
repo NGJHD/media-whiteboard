@@ -77,6 +77,8 @@ export interface TextObject extends BaseObject {
   color: string;
   outline: { color: string; width: number } | null;
   shadow: { color: string; blur: number; offsetX: number; offsetY: number } | null;
+  /** Fill behind the whole text box, or null for none. */
+  background: string | null;
   /** Text reflows within this; height is auto-computed (§10). */
   boxWidth: number;
 }

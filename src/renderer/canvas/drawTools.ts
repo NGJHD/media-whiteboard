@@ -171,7 +171,7 @@ export function beginShape(start: Point, shape: 'rect' | 'ellipse'): DrawGesture
           width: g.width,
           height: g.height,
           rotation: 0,
-          opacity: 1,
+          opacity: defaults.shapeOpacity,
           stroke: defaults.stroke,
           strokeWidth: defaults.strokeWidth,
           fill: defaults.fill,
@@ -252,6 +252,7 @@ export function placeText(at: Point): TextObject {
     color: defaults.textColor,
     outline: defaults.outline,
     shadow: defaults.shadow,
+    background: defaults.textBackground,
     boxWidth,
   };
   clampObjectToWorld(object);

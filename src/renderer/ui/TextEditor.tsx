@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { TextObject } from '../../shared/doc';
+import { measureTextHeight } from '../scene/buildScene';
 import { useStore, worldToScreen } from '../state/store';
 
 /**
@@ -109,8 +110,10 @@ export function TextEditor() {
     if (done.current) return;
     done.current = true;
     const store = useStore.getState();
-    const measured = ref.current?.scrollHeight;
-    const height = measured ? measured / view.scale : object!.height;
+    // Measured the way `buildScene` draws it, not from the textarea: the two
+    // differ by a few pixels, and the stored height is what the selection box,
+    // the handles and the background are sized from.
+    const height = measureTextHeight({ ...object!, text: next });
     const top = object!.y - object!.height / 2;
     // An empty text object would be invisible and unselectable.
     const hasContent = next.trim().length > 0;
@@ -194,6 +197,9 @@ export function TextEditor() {
         textAlign: object.align,
         lineHeight: 1.2,
         color: object.color,
+        // Unset rather than transparent when there is none, so the editor
+        // keeps whatever background its stylesheet gives it.
+        backgroundColor: object.background ?? undefined,
         transform: `rotate(${object.rotation}deg)`,
         transformOrigin: 'center',
       }}

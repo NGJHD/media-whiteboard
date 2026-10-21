@@ -75,6 +75,9 @@ export function Viewport() {
       const hooks = window as unknown as Record<string, unknown>;
       hooks.__mwProxyRect = (id: string) => interaction.proxyPosition(id);
       hooks.__mwAnchors = () => interaction.enabledAnchors();
+      // The stage itself, for tests that need to see where Konva actually drew
+      // content and handles rather than where the model says they are.
+      hooks.__mwStage = stage;
       // What the overlay is currently saying. The §9 placeholders are Konva
       // text on a chrome layer, so there is no DOM for a test to read.
       hooks.__mwOverlayText = () =>
@@ -121,6 +124,12 @@ export function Viewport() {
       }
 
       if (mouse.button !== 0) return;
+
+      // A press on a transform handle belongs to the Transformer. A handle sits
+      // on the box edge, so half of it is outside the object, and hit-testing
+      // that half against the model read it as empty canvas — deselecting
+      // mid-gesture and dropping whatever the resize was holding to.
+      if (e.target.findAncestor('Transformer')) return;
 
       const world = screenToWorld(state.view, pointer.x, pointer.y);
 

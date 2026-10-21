@@ -9,6 +9,7 @@ import type {
 } from '../../shared/doc';
 import { clearPaint } from '../actions/canvasActions';
 import { clampObjectToWorld } from '../actions/objectActions';
+import { refitTextHeight } from '../scene/buildScene';
 import { useStore, type Tool } from '../state/store';
 import { useToolDefaults } from '../state/toolDefaults';
 import { IconAlignCenter, IconAlignLeft, IconAlignRight } from './icons';
@@ -165,6 +166,7 @@ function ToolOptions() {
           />
           No fill
         </label>
+        <OpacitySlider value={defaults.shapeOpacity} onChange={(v) => defaults.set({ shapeOpacity: v })} />
       </div>
     );
   }
@@ -182,12 +184,19 @@ function ToolOptions() {
             color: defaults.textColor,
             outline: defaults.outline !== null,
             shadow: defaults.shadow !== null,
+            background: defaults.textBackground,
+            hasBackground: defaults.textBackground !== null,
           }}
           onChange={(patch) => {
             // The defaults store spells the text colour `textColor`, because it
             // also holds a brush colour and a stroke colour.
-            const { color, ...rest } = patch;
-            defaults.set(color === undefined ? rest : { ...rest, textColor: color });
+            // Likewise `textBackground`.
+            const { color, background, ...rest } = patch;
+            defaults.set({
+              ...rest,
+              ...(color === undefined ? {} : { textColor: color }),
+              ...(background === undefined ? {} : { textBackground: background }),
+            });
           }}
         />
       </div>
@@ -239,6 +248,7 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
     const strokeWidth = shared(shapes, (o) => (o as ShapeObject).strokeWidth);
     const fill = shared(shapes, (o) => (o as ShapeObject).fill);
     const noFill = shared(shapes, (o) => (o as ShapeObject).fill === null);
+    const opacity = shared(shapes, (o) => o.opacity);
 
     return (
       <div className="options">
@@ -304,6 +314,17 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
           />
           No fill
         </label>
+        <OpacitySlider
+          value={opacity}
+          onChange={(v, gesture) => {
+            // One drag of the slider is one undo entry, not one per tick.
+            useStore.getState().applyMerged(`Opacity #${gesture}`, (draft) => {
+              for (const obj of draft.objects) {
+                if (ids.includes(obj.id) && obj.kind === 'shape') obj.opacity = v;
+              }
+            });
+          }}
+        />
       </div>
     );
   }
@@ -322,10 +343,15 @@ function SelectionProperties({ objects }: { objects: SceneObject[] }) {
           color: shared(texts, (o) => (o as TextObject).color),
           outline: shared(texts, (o) => (o as TextObject).outline !== null),
           shadow: shared(texts, (o) => (o as TextObject).shadow !== null),
+          background: shared(texts, (o) => (o as TextObject).background),
+          hasBackground: shared(texts, (o) => (o as TextObject).background !== null),
         }}
         onChange={(patch, label) => {
           update(label, (o) => {
-            if (o.kind === 'text') Object.assign(o, patch);
+            if (o.kind !== 'text') return;
+            Object.assign(o, patch);
+            // Font, size and style change the wrap; the top edge stays put.
+            refitTextHeight(o);
           });
         }}
       />
@@ -365,6 +391,8 @@ function EditingTextProperties({ id }: { id: LayerId }) {
           color: object.color,
           outline: object.outline !== null,
           shadow: object.shadow !== null,
+          background: object.background,
+          hasBackground: object.background !== null,
         }}
         onChange={(patch, label) => {
           const store = useStore.getState();
@@ -379,7 +407,9 @@ function EditingTextProperties({ id }: { id: LayerId }) {
           }
           store.apply(label, (draft) => {
             const target = draft.objects.find((o) => o.id === id);
-            if (target?.kind === 'text') Object.assign(target, patch);
+            if (target?.kind !== 'text') return;
+            Object.assign(target, patch);
+            refitTextHeight(target);
           });
         }}
       />
@@ -498,12 +528,22 @@ interface TextStyleValues {
   color: string | null;
   outline: boolean | null;
   shadow: boolean | null;
+  background: string | null;
+  hasBackground: boolean | null;
 }
 
 type TextStylePatch = Partial<
   Pick<
     TextObject,
-    'fontFamily' | 'fontSize' | 'fontStyle' | 'underline' | 'align' | 'color' | 'outline' | 'shadow'
+    | 'fontFamily'
+    | 'fontSize'
+    | 'fontStyle'
+    | 'underline'
+    | 'align'
+    | 'color'
+    | 'outline'
+    | 'shadow'
+    | 'background'
   >
 >;
 
@@ -626,7 +666,70 @@ function TextControls({
         />
         Shadow
       </label>
+      <label className="field">
+        Background
+        <input
+          type="color"
+          className="swatch"
+          value={values.background ?? '#ffffff'}
+          disabled={values.hasBackground !== true}
+          onChange={(e) => onChange({ background: e.target.value }, 'Text background')}
+        />
+      </label>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          ref={(el) => {
+            if (el) el.indeterminate = values.hasBackground === null;
+          }}
+          checked={values.hasBackground === false}
+          onChange={(e) =>
+            onChange({ background: e.target.checked ? null : '#ffffff' }, 'Text background')
+          }
+        />
+        No background
+      </label>
     </>
+  );
+}
+
+/**
+ * Counts slider drags across every mount, so a remount on a selection change
+ * cannot reuse a label and merge into an unrelated entry.
+ */
+let opacityGesture = 0;
+
+/**
+ * Opacity as a percentage. `null` is indeterminate (§9). The second argument
+ * to `onChange` counts slider drags, so a caller can make each drag one undo
+ * entry however many ticks it fires.
+ */
+function OpacitySlider({
+  value,
+  onChange,
+}: {
+  value: number | null;
+  onChange(v: number, gesture: number): void;
+}) {
+  const percent = value === null ? null : Math.round(value * 100);
+  return (
+    <label className="field slider">
+      Opacity
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={percent ?? 100}
+        onPointerDown={() => {
+          opacityGesture += 1;
+        }}
+        onKeyDown={() => {
+          opacityGesture += 1;
+        }}
+        onChange={(e) => onChange(Number(e.target.value) / 100, opacityGesture)}
+      />
+      <span className="num">{percent === null ? '—' : `${percent}%`}</span>
+    </label>
   );
 }
 

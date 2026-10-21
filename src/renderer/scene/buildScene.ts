@@ -126,7 +126,7 @@ function buildObject(
   frameIndex: number,
   fps: number,
   proxies: boolean,
-): Konva.Shape | null {
+): Konva.Shape | Konva.Group | null {
   switch (obj.kind) {
     case 'media':
       return buildMedia(obj, frameIndex, fps, proxies);
@@ -184,28 +184,60 @@ function buildShape(obj: ShapeObject): Konva.Shape {
   return new Konva.Rect(props);
 }
 
-function buildText(obj: TextObject): Konva.Shape {
-  return new Konva.Text({
-    ...commonProps(obj),
+/**
+ * Everything about a text node that decides how it wraps and how tall it comes
+ * out. Shared with `measureTextHeight`, so the height the model stores is the
+ * height this node draws.
+ */
+function textAttrs(obj: TextObject, boxWidth: number) {
+  return {
     // §10: text reflows within boxWidth and its height is always auto-computed
     // from the wrapped result, so height is never imposed here.
-    width: obj.boxWidth,
+    width: boxWidth,
     height: undefined,
-    offsetX: obj.boxWidth / 2,
-    offsetY: obj.height / 2,
     text: obj.text,
     fontFamily: obj.fontFamily,
     fontSize: obj.fontSize,
     fontStyle: obj.fontStyle,
+    wrap: 'word',
+    lineHeight: 1.2,
     // Konva's own name for underline. Empty string, not undefined: the Text
     // node's default is '' and passing undefined logs a warning.
     textDecoration: obj.underline ? 'underline' : '',
     // Aligns each wrapped line inside `width`, which is boxWidth — so the box
     // itself does not move and the geometry above is untouched.
     align: obj.align,
+  } as const;
+}
+
+/** The wrapped height of a text at `boxWidth` (default: its own). */
+export function measureTextHeight(obj: TextObject, boxWidth = obj.boxWidth): number {
+  return new Konva.Text(textAttrs(obj, boxWidth)).height();
+}
+
+/**
+ * Re-measures a text's height after anything that changes its wrap, keeping
+ * the **top edge** where it was (§10). The model stores a centre, so a height
+ * change alone would grow the text in both directions; the centre moves half
+ * the difference along the text's own downward axis, which is what keeps a
+ * rotated text's top edge on the same line too.
+ */
+export function refitTextHeight(obj: TextObject): void {
+  const height = measureTextHeight(obj);
+  const shift = (height - obj.height) / 2;
+  const rad = (obj.rotation * Math.PI) / 180;
+  obj.x -= Math.sin(rad) * shift;
+  obj.y += Math.cos(rad) * shift;
+  obj.height = height;
+}
+
+function buildText(obj: TextObject): Konva.Shape | Konva.Group {
+  const text = new Konva.Text({
+    ...commonProps(obj),
+    ...textAttrs(obj, obj.boxWidth),
+    offsetX: obj.boxWidth / 2,
+    offsetY: obj.height / 2,
     fill: obj.color,
-    wrap: 'word',
-    lineHeight: 1.2,
     stroke: obj.outline?.color,
     strokeWidth: obj.outline?.width ?? 0,
     // Konva paints the stroke over the glyph by default, which eats thin text.
@@ -216,6 +248,33 @@ function buildText(obj: TextObject): Konva.Shape {
     shadowOffsetY: obj.shadow?.offsetY,
     shadowEnabled: Boolean(obj.shadow),
   });
+  if (!obj.background) return text;
+
+  // The background covers the text box exactly — boxWidth by the wrapped
+  // height — so it adds nothing to the object's bounds and Trim to fit (§4)
+  // is unaffected. Grouped so it rotates and fades with the text, and so
+  // opacity applies to the pair once rather than letting the box show through
+  // translucent glyphs.
+  const group = new Konva.Group({
+    x: obj.x,
+    y: obj.y,
+    offsetX: obj.boxWidth / 2,
+    offsetY: obj.height / 2,
+    rotation: obj.rotation,
+    opacity: obj.opacity,
+    listening: false,
+  });
+  group.add(
+    new Konva.Rect({
+      width: obj.boxWidth,
+      height: obj.height,
+      fill: obj.background,
+      listening: false,
+    }),
+  );
+  text.setAttrs({ x: 0, y: 0, offsetX: 0, offsetY: 0, rotation: 0, opacity: 1 });
+  group.add(text);
+  return group;
 }
 
 /**
