@@ -75,6 +75,7 @@ export async function importMetaAsObject(
     frameDurationsMs: meta.frameDurationsMs,
     nativeWidth: meta.nativeWidth,
     nativeHeight: meta.nativeHeight,
+    shadow: null,
   };
 
   // A drop bigger than the whole world cannot be clamped, only shrunk.

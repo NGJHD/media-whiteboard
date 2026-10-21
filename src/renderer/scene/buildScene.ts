@@ -159,7 +159,17 @@ function buildMedia(
   // The node is sized from the model, not from the bitmap, so a proxy draws at
   // exactly the same place and size as the native frame would — softer, never
   // displaced.
-  return new Konva.Image({ ...commonProps(obj), image: bitmap });
+  return new Konva.Image({
+    ...commonProps(obj),
+    image: bitmap,
+    // Konva scales shadow blur and offset with the node's absolute scale, so
+    // the preview at viewScale and the export at 1 agree.
+    shadowColor: obj.shadow?.color,
+    shadowBlur: obj.shadow?.blur,
+    shadowOffsetX: obj.shadow?.offsetX,
+    shadowOffsetY: obj.shadow?.offsetY,
+    shadowEnabled: Boolean(obj.shadow),
+  });
 }
 
 function buildShape(obj: ShapeObject): Konva.Shape {

@@ -280,8 +280,8 @@ export interface Api {
   importClipboardImage(bytes: number[], mimeType: string): Promise<ImportResult>;
   saveProject(data: ProjectFile, suggestedPath: string): Promise<string | null>;
   openProject(): Promise<ProjectLoadResult>;
-  /** Returns the subset of paths that no longer exist (§13). */
-  checkSources(sourcePaths: string[]): Promise<string[]>;
+  /** Reads a project by path, for one dropped on the canvas. No dialog. */
+  readProject(filePath: string): Promise<ProjectLoadResult>;
   openMediaDialog(): Promise<string[]>;
   getCacheInfo(): Promise<CacheInfo>;
   clearCache(): Promise<CacheInfo>;

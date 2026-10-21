@@ -1166,3 +1166,56 @@ inside the Transformer, the commit stores `measureTextHeight`, and the top-edge
 constraint finds its text through the Transformer's node rather than the
 selection, so nothing that touches the selection can switch it off mid-drag.
 
+## D-049 — Media drop shadow
+
+`MediaObject.shadow` has the same shape as `TextObject.shadow` and is drawn the
+same way: Konva's shadow attributes on the media node in `buildScene`. Konva
+scales blur and offset with the node's absolute scale, so the preview (at
+`viewScale`, drawing proxy frames) and the export (at 1, native frames) agree.
+The canvas shadow follows the bitmap's alpha, so a cut-out PNG or a transparent
+GIF casts a shadow of its shape, not of its box.
+
+The UI is a toggle and a colour, as for text. The default is centred (blur 24,
+offset 0, 0), an even shadow on every side rather than a drop to the bottom
+right, and its blur is larger than text's because media is usually far larger
+than a line of text. Blur
+and offset are in the model and could get controls later without a schema
+change. It is on the single-media row only, alongside size, because that row
+is per-object already (§9).
+
+Not in the bounds, matching text: Trim to fit and snapping use the object's
+box. Measured cost in the live preview: none — an animated layer at 1200x675
+on screen held 16.5 ms p50 / 17.5 ms p99 frame gaps with and without a blur-24
+shadow.
+
+Projects saved before this load with `shadow: null`, so no schema bump.
+
+## D-050 — Project load re-imports media; projects open by drop
+
+**The hang.** Load trusted the cache key stored in the `.mwproj`. Nothing ever
+checked that the entry still existed, and nothing would decode it if it did
+not, so after Clear cache, the 5 GB eviction, or any rebuild of the packaged
+app (electron-builder deletes `release/win-unpacked`, cache included) a loaded
+media layer had no frames at all. It sat on its Loading placeholder for good
+while the preview re-requested the missing frame every animation frame.
+
+**The fix** sends each distinct source back through `media:import`, in
+parallel, before the document is replaced. That is the drop's own path: it
+returns the existing entry at once when there is one, and otherwise decodes the
+first frame and continues in the background with the §7 progress bars, which
+are registered only after the layers are in the document (a job with no layer
+is cancelled). The returned meta overwrites `cacheKey`, `frameCount`, timing
+and native size, so a source edited since the save is re-read rather than
+paired with stale frames. A source that fails to import for any reason, not
+only a missing one, is dropped under §13's single summary warning, which
+replaces the old `project:checkSources` IPC.
+
+The cost is one ffprobe per distinct source on every open, since import probes
+before it looks at the cache. That is a drop's cost per layer, and measured on
+a three-layer project it opened in 0.17 s.
+
+**Drop to open.** `project:read` takes a path and reuses the dialog's reader;
+it refuses anything but a `.mwproj`. A drop containing a project opens it and
+ignores the rest with a toast, because the load replaces the document they
+would have landed in.
+

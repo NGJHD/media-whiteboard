@@ -1,6 +1,7 @@
 import Konva from 'konva';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Rect } from '../../shared/doc';
+import { PROJECT_EXTENSION } from '../../shared/ipc';
 import { buildScene, framesNeededAt } from '../scene/buildScene';
 import { planLoop } from '../scene/timing';
 import { load, peek } from '../media/bitmapCache';
@@ -397,6 +398,17 @@ export function Viewport() {
         e.preventDefault();
         const paths = pathsFromDataTransfer(e.dataTransfer);
         if (paths.length === 0) return;
+
+        // A project dropped on the canvas opens, exactly as Ctrl+O would. It
+        // replaces the document, so anything dropped with it has nowhere to go.
+        const project = paths.find((p) => p.toLowerCase().endsWith(`.${PROJECT_EXTENSION}`));
+        if (project) {
+          if (paths.length > 1) {
+            useStore.getState().toast('warn', 'Opened the project; the other dropped files were ignored.');
+          }
+          void useStore.getState().openProjectFile(project);
+          return;
+        }
 
         const rect = e.currentTarget.getBoundingClientRect();
         const { view } = useStore.getState();

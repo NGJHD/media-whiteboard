@@ -698,6 +698,152 @@ console.log('=== text background and shape opacity in the output (§3) ===');
   }
 }
 
+/* -- Media drop shadow reaches the output ---------------------------------- */
+
+console.log('');
+console.log('=== media drop shadow in the output (§3) ===');
+{
+  const files = {
+    plain: path.join(workDir, 'media-plain.webp'),
+    shadowed: path.join(workDir, 'media-shadow.webp'),
+    centred: path.join(workDir, 'media-shadow-centred.webp'),
+  };
+  for (const f of Object.values(files)) fs.rmSync(f, { force: true });
+
+  const r = await harness.run(`
+    (async () => {
+      const { importFiles } = await import('/media/importMedia.ts');
+      const { exportDocument } = await import('/export/exportScene.ts');
+      const store = window.__mwStore;
+      const s = () => store.getState();
+      const files = ${JSON.stringify(files)};
+
+      await importFiles([${fixture}], { x: 0, y: 0 });
+      const write = async (out, shadow) => {
+        s().apply('setup', (d) => {
+          d.canvasRect = { x: -160, y: -90, width: 320, height: 180 };
+          d.background = { transparent: false, color: '#ffffff' };
+          d.outputPath = out;
+          d.format = 'webp';
+          // 100 x 100 at the centre: output pixels 110..210 by 40..140.
+          const m = d.objects[0];
+          m.x = 0; m.y = 0; m.width = 100; m.height = 100;
+          m.shadow = shadow;
+        });
+        const res = await exportDocument({ doc: s().doc });
+        if (!res.ok) throw new Error(res.error);
+      };
+
+      await write(files.plain, null);
+      // No blur, so the shadow is a hard-edged copy offset by 20, 20.
+      await write(files.shadowed, { color: '#000000', blur: 0, offsetX: 20, offsetY: 20 });
+      // The default: centred, so it shows on every side.
+      await write(files.centred, { color: '#000000', blur: 24, offsetX: 0, offsetY: 0 });
+      return { ok: true };
+    })()
+  `);
+
+  if (!r.ok) {
+    c.fail(`media shadow: ${r.error}`);
+    for (const line of r.log ?? []) console.error(`    ${line}`);
+  } else {
+    // Past the image's bottom-right corner, inside the offset shadow.
+    const plain = pixels(files.plain, 320, 180)(220, 150);
+    const shadowed = pixels(files.shadowed, 320, 180)(220, 150);
+    c.truthy('without a shadow the background shows there', near(plain, WHITE), show(plain));
+    c.truthy('with one, the shadow does', shadowed[0] < 40 && shadowed[1] < 40 && shadowed[2] < 40,
+      show(shadowed));
+    const inside = pixels(files.shadowed, 320, 180)(160, 90);
+    c.truthy('and the image still draws over it', near(inside, BLUE), show(inside));
+
+    // 4 px outside each edge of the image (110..210 by 40..140).
+    const centred = pixels(files.centred, 320, 180);
+    for (const [side, x, y] of [['left', 106, 90], ['right', 214, 90], ['top', 160, 36], ['bottom', 160, 144]]) {
+      const p = centred(x, y);
+      c.truthy(`a centred shadow darkens the ${side} edge`, p[0] < 200, show(p));
+    }
+  }
+}
+
+/* -- Project load re-imports its media (§13, §7) --------------------------- */
+
+console.log('');
+console.log('=== project load re-imports media whose cache is gone (§13) ===');
+{
+  const project = path.join(workDir, 'stale-cache.mwproj');
+  const notProject = path.join(workDir, 'stale-cache.txt');
+  const clip = path.join(root, 'test-fixtures', 'anim-25fps-1.5s.webm');
+  const still = path.join(root, 'test-fixtures', 'static.png');
+  const gone = path.join(workDir, 'no-such-source.png');
+  // Cache keys that point at nothing — what a project looks like after Clear
+  // cache, the LRU eviction, or a freshly unzipped copy of the app.
+  const media = (id, sourcePath, x) => ({
+    id, kind: 'media', x, y: 0, width: 200, height: 120, rotation: 0, opacity: 1,
+    sourcePath, cacheKey: '0000000000000000', frameCount: 1, frameDurationsMs: [0],
+    nativeWidth: 200, nativeHeight: 120, shadow: null,
+  });
+  fs.writeFileSync(project, JSON.stringify({
+    schemaVersion: 1,
+    doc: {
+      canvasRect: { x: -400, y: -300, width: 800, height: 600 },
+      background: { transparent: false, color: '#000000' },
+      outputFps: 'auto', quality: 'high', format: 'webp',
+      outputPath: path.join(workDir, 'stale-cache.webp'),
+      objects: [media('clip', clip, -200), media('still', still, 200), media('gone', gone, 0)],
+      paint: { strokes: [], dirtyRect: null },
+    },
+  }));
+  fs.writeFileSync(notProject, 'not a project');
+
+  const r = await harness.run(`
+    (async () => {
+      const { load } = await import('/media/bitmapCache.ts');
+      const store = window.__mwStore;
+      const s = () => store.getState();
+
+      await s().openProjectFile(${JSON.stringify(project)});
+      const settled = await window.__mwIdle();
+      const objects = s().doc.objects;
+      const frames = [];
+      for (const o of objects) frames.push(Boolean(await load(o.cacheKey, 0)));
+      const warnings = s().toasts.map((t) => t.message);
+
+      // The by-path read is for project files only.
+      const before = s().doc.objects.length;
+      await s().openProjectFile(${JSON.stringify(notProject)});
+
+      return {
+        ok: true,
+        settled,
+        ids: objects.map((o) => o.id),
+        rekeyed: objects.every((o) => o.cacheKey !== '0000000000000000'),
+        clipFrames: objects.find((o) => o.id === 'clip')?.frameCount,
+        frames,
+        warnings,
+        projectPath: s().projectPath,
+        untouchedByNonProject: s().doc.objects.length === before,
+        lastToast: s().toasts.at(-1)?.message,
+      };
+    })()
+  `);
+
+  if (!r.ok) {
+    c.fail(`project load: ${r.error}`);
+    for (const line of r.log ?? []) console.error(`    ${line}`);
+  } else {
+    c.check('the missing source is dropped, the rest kept', r.ids, ['clip', 'still']);
+    c.truthy('one warning names the dropped layer',
+      r.warnings.some((m) => m.includes('1 layer dropped')), JSON.stringify(r.warnings));
+    c.truthy('each layer gets a live cache key', r.rekeyed);
+    c.truthy('the clip gets its real frame count back', r.clipFrames > 1, `${r.clipFrames}`);
+    c.truthy('its background decode finishes', r.settled);
+    c.check('and every layer has a frame to draw', r.frames, [true, true]);
+    c.check('the project path is remembered for Ctrl+S', r.projectPath, project);
+    c.truthy('a non-project path changes nothing', r.untouchedByNonProject);
+    c.truthy('and says so', /not a project file/.test(r.lastToast ?? ''), r.lastToast);
+  }
+}
+
 await harness.stop();
 console.log('');
 console.log(c.failures === 0 ? 'All tool smoke tests passed.' : `${c.failures} failed.`);

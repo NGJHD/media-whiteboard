@@ -59,7 +59,7 @@ const api = {
   saveProject: (data: ProjectFile, suggestedPath: string) =>
     ipcRenderer.invoke('project:save', data, suggestedPath),
   openProject: () => ipcRenderer.invoke('project:open'),
-  checkSources: (sourcePaths: string[]) => ipcRenderer.invoke('project:checkSources', sourcePaths),
+  readProject: (filePath: string) => ipcRenderer.invoke('project:read', filePath),
   openMediaDialog: () => ipcRenderer.invoke('media:openDialog'),
   getCacheInfo: () => ipcRenderer.invoke('cache:info'),
   clearCache: () => ipcRenderer.invoke('cache:clear'),

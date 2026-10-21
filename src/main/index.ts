@@ -262,27 +262,29 @@ ipcMain.handle('project:open', async (): Promise<ProjectLoadResult> => {
   if (result.canceled || result.filePaths.length === 0) {
     return { ok: false, cancelled: true, error: null };
   }
-  const file = result.filePaths[0]!;
+  return readProject(result.filePaths[0]!);
+});
+
+/** A project dropped on the canvas: the same read, without the dialog. */
+ipcMain.handle('project:read', (_e, file: string): Promise<ProjectLoadResult> => {
+  if (path.extname(file).toLowerCase() !== `.${PROJECT_EXTENSION}`) {
+    return Promise.resolve({
+      ok: false,
+      cancelled: false,
+      error: `${path.basename(file)} is not a project file.`,
+    });
+  }
+  return readProject(file);
+});
+
+async function readProject(file: string): Promise<ProjectLoadResult> {
   try {
     const data = JSON.parse(await fsp.readFile(file, 'utf8')) as ProjectFile;
     return { ok: true, path: file, data };
   } catch (err) {
     return { ok: false, cancelled: false, error: `Could not read ${file}: ${String(err)}` };
   }
-});
-
-/** §13: a layer whose source file has vanished is dropped, not prompted for. */
-ipcMain.handle('project:checkSources', async (_e, sourcePaths: string[]): Promise<string[]> => {
-  const missing: string[] = [];
-  for (const source of sourcePaths) {
-    try {
-      await fsp.access(source);
-    } catch {
-      missing.push(source);
-    }
-  }
-  return missing;
-});
+}
 
 /* -- Self-update (UPDATE_BUTTON.md) ---------------------------------------- */
 

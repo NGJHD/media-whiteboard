@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { applyPatches, enablePatches, produce, produceWithPatches, type Patch } from 'immer';
 import type { Doc, LayerId, Rect, SceneObject, TextObject } from '../../shared/doc';
-import { createEmptyDoc } from '../../shared/doc';
+import { baseName, createEmptyDoc } from '../../shared/doc';
+import type { ImportResult, MediaMeta, ProjectLoadResult } from '../../shared/ipc';
 import { PROJECT_SCHEMA_VERSION, PROJECT_EXTENSION } from '../../shared/ipc';
 import { EXTENSION_PATTERN } from '../../shared/formats';
 import { computeDirtyRect, replay } from '../paint/paintBuffer';
@@ -139,6 +140,8 @@ interface State {
   setPendingText(object: TextObject | null): void;
   saveProject(): Promise<void>;
   openProject(): Promise<void>;
+  /** Opens a project by path — one dropped on the canvas. */
+  openProjectFile(filePath: string): Promise<void>;
 
   selectedObjects(): SceneObject[];
 }
@@ -392,7 +395,35 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async openProject() {
-    const result = await window.api.openProject();
+    await loadProject(await window.api.openProject());
+  },
+
+  async openProjectFile(filePath) {
+    await loadProject(await window.api.readProject(filePath));
+  },
+
+  selectedObjects() {
+    const { doc, selection } = get();
+    return doc.objects.filter((o) => selection.includes(o.id));
+  },
+}));
+
+/**
+ * §13 load, from whichever way the file arrived.
+ *
+ * Every media layer goes back through the same import a drop uses. The project
+ * stores a cache key, but the frames behind it are disposable — Clear cache,
+ * the 5 GB eviction, or a fresh copy of the app (the packaged app keeps its
+ * cache in its own folder) all remove them — and nothing else would ever
+ * decode them again: the layer sat on its Loading placeholder for good. Import
+ * answers from the cache when the entry is there and decodes it when it is
+ * not, and it re-derives the key, so a source edited since the save is picked
+ * up rather than pointing at stale frames.
+ */
+async function loadProject(result: ProjectLoadResult): Promise<void> {
+  const get = useStore.getState;
+  const set = useStore.setState;
+  {
     if (!result.ok) {
       if (!result.cancelled && result.error) get().toast('error', result.error);
       return;
@@ -408,16 +439,43 @@ export const useStore = create<State>((set, get) => ({
 
     const doc = result.data.doc as Doc;
 
-    // §13: drop layers whose source has vanished, with one summary warning.
-    // Never prompt for relocation, never block the load.
-    const sources = doc.objects.filter((o) => o.kind === 'media').map((o) => o.sourcePath);
-    const missing = new Set(await window.api.checkSources(sources));
+    // §13: drop layers whose source has vanished (or no longer imports), with
+    // one summary warning. Never prompt for relocation. In parallel, and each
+    // resolves at its first frame, so a long decode does not hold the load.
+    const sources = [
+      ...new Set(doc.objects.flatMap((o) => (o.kind === 'media' ? [o.sourcePath] : []))),
+    ];
+    const imports = new Map<string, ImportResult>();
+    await Promise.all(
+      sources.map(async (source) => imports.set(source, await window.api.importMedia(source))),
+    );
+    const missing = new Map<string, string>();
+    for (const [source, imported] of imports) {
+      if (!imported.ok) missing.set(source, imported.error);
+    }
     const kept = doc.objects.filter((o) => o.kind !== 'media' || !missing.has(o.sourcePath));
 
     // §10: a referenced font that is not installed falls back to the default.
     const available = get().fonts;
     const missingFonts = new Set<string>();
+    const pending: MediaMeta[] = [];
     for (const obj of kept) {
+      if (obj.kind === 'media') {
+        const imported = imports.get(obj.sourcePath);
+        if (imported?.ok) {
+          const meta = imported.meta;
+          obj.cacheKey = meta.cacheKey;
+          obj.frameCount = meta.frameCount;
+          obj.frameDurationsMs = meta.frameDurationsMs;
+          obj.nativeWidth = meta.nativeWidth;
+          obj.nativeHeight = meta.nativeHeight;
+          if (!meta.complete && !pending.some((m) => m.cacheKey === meta.cacheKey)) {
+            pending.push(meta);
+          }
+        }
+        // Media shadow postdates the first project files too.
+        obj.shadow ??= null;
+      }
       if (obj.kind !== 'text') continue;
       // Underline, alignment and background postdate the first project files, and a text
       // object written before them has neither. Filled in here rather than at
@@ -446,12 +504,24 @@ export const useStore = create<State>((set, get) => ({
     replay(loaded.paint);
     get().fitToWindow();
 
+    // §7: the same non-blocking progress bar a drop shows, registered only now
+    // that the layers are in the document — a job with no layer is cancelled.
+    for (const meta of pending) {
+      get().beginImport({
+        cacheKey: meta.cacheKey,
+        name: baseName(meta.sourcePath),
+        readyFrames: meta.readyFrames,
+        totalFrames: meta.frameCount,
+      });
+    }
+
     // §13: one summary warning listing every dropped file, not one each.
     if (missing.size > 0) {
+      const plural = missing.size === 1 ? '' : 's';
       get().toast(
         'warn',
-        `${missing.size} layer${missing.size === 1 ? '' : 's'} dropped — source file missing.`,
-        [...missing].join('\n'),
+        `${missing.size} layer${plural} dropped — source could not be loaded.`,
+        [...missing.values()].join('\n'),
       );
     }
     if (missingFonts.size > 0) {
@@ -461,13 +531,8 @@ export const useStore = create<State>((set, get) => ({
         [...missingFonts].join('\n'),
       );
     }
-  },
-
-  selectedObjects() {
-    const { doc, selection } = get();
-    return doc.objects.filter((o) => selection.includes(o.id));
-  },
-}));
+  }
+}
 
 /* -------------------------------------------------------------------------- */
 /* Coordinate helpers                                                         */

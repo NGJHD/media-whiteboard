@@ -422,6 +422,13 @@ function EditingTextProperties({ id }: { id: LayerId }) {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * In world pixels. Centred — no offset — so it reads as a soft glow around the
+ * media rather than a drop to one side. The blur is larger than text's, since
+ * media is usually far bigger than a line of text.
+ */
+const MEDIA_SHADOW_DEFAULT = { color: '#000000', blur: 24, offsetX: 0, offsetY: 0 };
+
+/**
  * The layer's size on the canvas, alongside the size of the source it came from.
  *
  * Aspect-locked to the **source**, not to whatever the layer happens to be now:
@@ -473,6 +480,15 @@ function MediaSize({ object }: { object: MediaObject }) {
     if (e.key === 'Escape') reset();
   }
 
+  const shadow = object.shadow;
+
+  function setShadow(next: MediaObject['shadow']) {
+    apply('Media shadow', (draft) => {
+      const target = draft.objects.find((o) => o.id === object.id);
+      if (target?.kind === 'media') target.shadow = next;
+    });
+  }
+
   return (
     <>
       <span className="field muted-note">
@@ -498,6 +514,26 @@ function MediaSize({ object }: { object: MediaObject }) {
           onChange={(e) => setHeight(e.target.value)}
           onBlur={() => commit('height')}
           onKeyDown={(e) => onKeyDown(e, 'height')}
+        />
+      </label>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={shadow !== null}
+          onChange={(e) => setShadow(e.target.checked ? MEDIA_SHADOW_DEFAULT : null)}
+        />
+        Shadow
+      </label>
+      <label className="field">
+        Colour
+        <input
+          type="color"
+          className="swatch"
+          value={shadow?.color ?? MEDIA_SHADOW_DEFAULT.color}
+          disabled={shadow === null}
+          onChange={(e) => {
+            if (shadow) setShadow({ ...shadow, color: e.target.value });
+          }}
         />
       </label>
     </>

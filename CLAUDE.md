@@ -175,6 +175,8 @@ interface MediaObject extends BaseObject {
   frameCount: number;               // 1 for static
   frameDurationsMs: number[];       // native timing; length == frameCount
   nativeWidth: number; nativeHeight: number;
+  shadow: { color: string; blur: number; offsetX: number; offsetY: number } | null;
+                                    // drop shadow following the source's alpha
 }
 
 interface ShapeObject extends BaseObject {
@@ -495,7 +497,7 @@ Per-kind properties, matching the fields in §5:
 
 | Selection | Controls |
 |---|---|
-| Media | source size (read-only), width, height |
+| Media | source size (read-only), width, height, Shadow, shadow color |
 | Shape | stroke color, stroke width, fill color, No fill, opacity |
 | Text | font family, size, bold, italic, underline, alignment, color, outline, shadow, background color, No background |
 | Mixed kinds | *(none — the section is empty)* |
@@ -505,6 +507,12 @@ sets the other to whatever keeps the layer undistorted. That is the point of
 being able to type them, and it matches the corner-only handles — there is
 deliberately no way to distort media by accident. They are per-object, so a
 multi-selection of media shows nothing.
+
+The media **Shadow** toggle adds a shadow centred behind the media (black, blur
+24 world px, no offset), so it shows evenly on every side, and the swatch
+recolours it. Like text's shadow it is drawn by `buildScene`
+and is not part of the object's bounds, so Trim to fit does not grow to include
+it.
 
 `opacity` is in the model (§5) and honoured by `buildScene`. **Only shapes expose
 it**, as a percentage slider in the Rect/Ellipse tool options and in a shape
@@ -840,8 +848,20 @@ estimated.
 `.mwproj`, JSON, saved via Ctrl+S. Contains the full `Doc` (§5), the paint layer's
 stroke command list, and absolute source paths.
 
-**On load, if a source file is missing**: drop that layer, and show a single summary
-warning listing every dropped file. Do not prompt for relocation. Do not block the load.
+Open it with Ctrl+O **or by dropping the `.mwproj` file on the canvas** — one
+load path either way. A drop that includes a project opens the project and
+ignores the other files dropped with it.
+
+**On load, every media layer is re-imported through the same path as a drop
+(§7).** The cache key in the file is only a hint: the frames behind it are
+disposable (Clear cache, the 5 GB eviction, a freshly unzipped app — the
+packaged app's cache lives in its own folder), and a layer whose entry is gone
+would otherwise sit on its Loading placeholder forever. Import answers from the
+cache when the entry exists and decodes it when it does not, re-deriving the
+key and frame metadata, with the usual non-blocking progress bars.
+
+**On load, if a source file is missing** or no longer imports: drop that layer, and
+show a single summary warning listing every dropped file. Do not prompt for relocation. Do not block the load.
 
 Include a `schemaVersion` integer from day one.
 

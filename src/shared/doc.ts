@@ -44,6 +44,8 @@ export interface MediaObject extends BaseObject {
   frameDurationsMs: number[];
   nativeWidth: number;
   nativeHeight: number;
+  /** Drop shadow, following the source's own alpha. Null for none. */
+  shadow: { color: string; blur: number; offsetX: number; offsetY: number } | null;
 }
 
 export interface ShapeObject extends BaseObject {
